@@ -27,7 +27,12 @@ public sealed class MouseBatteryDetailsWindow : Window
 {
     private const double CardWidth = 232;
     private const double CardCornerRadius = 8;
-    private const int SpacingAboveTaskbar = 8;
+
+    /// <summary>
+    /// 卡片底边与任务栏之间的留白。托盘图标上方一大片区域若贴得太近会显得压住通知区域，
+    /// 这里留出更明显的间距，视觉上与托盘图标分离。
+    /// </summary>
+    private const int SpacingAboveTaskbar = 16;
 
     private readonly Border _cardBorder;
     private readonly StackPanel _rootPanel;
