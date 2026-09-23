@@ -53,13 +53,21 @@
 
 ## 📸 界面预览
 
-| 浅色模式亚克力卡片 | 深色模式亚克力卡片 |
+### 电量详情卡片（真实 DWM 亚克力毛玻璃）
+
+| 浅色模式 | 深色模式 |
 | :---: | :---: |
 | <img src="assets/card_light.png" width="300" /> | <img src="assets/card_dark.png" width="300" /> |
 
-| 任务栏托盘实测（环形进度 / 电池胶囊） | 现代 Fluent 设置中心 |
+### 现代 Fluent 设置中心
+
+| 浅色模式 | 深色模式 |
 | :---: | :---: |
-| <img src="assets/tray_ring.png" width="420" /><br/><br/><img src="assets/tray_battery.png" width="420" /> | <img src="assets/settings.png" width="360" /> |
+| <img src="assets/settings_light.png" width="340" /> | <img src="assets/settings_dark.png" width="340" /> |
+
+### 三种任务栏托盘图标样式
+
+<img src="assets/tray_styles.png" width="240" />
 
 ---
 
