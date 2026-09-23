@@ -91,7 +91,7 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 
 前往 **[Releases 最新发布页面](https://github.com/yixing233/logi-tray/releases/latest)** 下载：
 
-- 文件名：`logi-tray-v1.0.0.zip`（约 1.6 MB）
+- 文件名：`logi-tray-v1.0.1.zip`（约 1.5 MB）
 - 内含 WPF 主程序、C++ 原生 HID++ 探测引擎、Lucide 矢量图标字体与全部自动化脚本。
 
 ### 安装方式
@@ -109,7 +109,7 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 
 ## 🛠️ 兼容设备列表（通用支持）
 
-基于罗技官方底层工业级 **HID++ 2.0 协议规范**，程序动态枚举 USB/HID 节点并发送 `0x1004` (UnifiedBattery) 电量查询，包括但不限于以下设备：
+基于罗技官方底层工业级 **HID++ 2.0 协议规范**，程序动态枚举 USB/HID 节点，优先查询 `0x1004` (UnifiedBattery)，设备未实现时回退到 `0x1000` (BatteryStatus)，包括但不限于以下设备：
 
 - **罗技 G 系列游戏无线鼠标**：
   - PRO Wireless (GPW 狗屁王一代)
@@ -144,13 +144,13 @@ cd logi-tray
 dotnet build wpf/MouseBatteryTray.csproj -c Release
 ```
 
-### 编译原生 C++ 探测器
-```powershell
+### 编译原生 HID++ reader
+```bat
 cd native
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release
+build.bat
 ```
+
+生成的 `native/build/mouse-tray.exe` 由 WPF 主程序调用，用于读取罗技设备电量。
 
 ---
 

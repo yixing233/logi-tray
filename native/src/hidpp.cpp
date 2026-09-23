@@ -464,26 +464,47 @@ std::vector<Reading> ReadAll(double budgetSec) {
 
                 if (!rx.IsPresent(deviceIndex, probe)) continue;
 
-                // 读电量：feature 索引 -> GET_STATUS -> 设备名
-                const int findex = rx.FeatureIndex(
+                // 优先读取新版 UnifiedBattery；G304 等设备通常只实现
+                // BATTERY_STATUS(0x1000)，其函数号与 UnifiedBattery 不同。
+                int findex = rx.FeatureIndex(
                     deviceIndex, kFeatureUnifiedBattery, left);
-                if (findex == 0) continue;
-
                 uint8_t status[16] = {0};
-                if (!rx.Call(deviceIndex, findex, kFnGetStatus,
-                             nullptr, 0, status, sizeof(status), left))
-                    continue;
+                bool batteryStatusFeature = false;
+                bool gotBattery = findex != 0 &&
+                    rx.Call(deviceIndex, findex, kFnGetStatus,
+                            nullptr, 0, status, sizeof(status), left);
+
+                if (!gotBattery) {
+                    const double remaining = deadline - NowSec();
+                    if (remaining <= 0) continue;
+                    findex = rx.FeatureIndex(
+                        deviceIndex, kFeatureBatteryStatus, remaining);
+                    if (findex == 0) continue;
+
+                    const double requestBudget = deadline - NowSec();
+                    if (requestBudget <= 0 ||
+                        !rx.Call(deviceIndex, findex, kFnBatteryStatusGetStatus,
+                                 nullptr, 0, status, sizeof(status),
+                                 requestBudget))
+                        continue;
+                    batteryStatusFeature = true;
+                }
 
                 Reading r;
                 r.deviceIndex = deviceIndex;
-                // 显式转 int：status[0] 是 uint8_t，直接和字面量 0/100 比较
-                // 会让 std::min/max 的模板参数推导二义（uint8_t vs int）
+                // 两种 feature 的状态帧格式不同：BatteryStatus 返回
+                // [电量百分比, 下一档阈值, 电池状态]；第二字节不是 flags。
                 r.percent = std::max(0, std::min(100,
                                      static_cast<int>(status[0])));
-                r.level = LevelFromFlags(status[1]);
-                r.chargingState = status[2];
-                r.chargingText = ChargingText(status[2]);
-                r.externalPower = status[3];
+                if (batteryStatusFeature) {
+                    r.chargingState = NormalizeBatteryStatus(status[2]);
+                    r.chargingText = BatteryStatusText(status[2]);
+                } else {
+                    r.level = LevelFromFlags(status[1]);
+                    r.chargingState = status[2];
+                    r.chargingText = ChargingText(status[2]);
+                    r.externalPower = status[3];
+                }
 
                 // 设备名走缓存（一次要 1~3 次往返，约 180ms）
                 {

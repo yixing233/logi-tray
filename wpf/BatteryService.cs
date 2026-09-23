@@ -38,7 +38,11 @@ public sealed class BatteryService : IDisposable
 
         _nativeExePath = File.Exists(p1) ? p1 : (File.Exists(p3) ? p3 : "mouse-tray.exe");
 
-        _timer = new System.Threading.Timer(OnTimerTick, null, TimeSpan.Zero, TimeSpan.FromSeconds(_config.Interval));
+        // Program 在注册事件后会主动 RefreshNow；延迟定时器首轮，避免启动时并发访问 HID++ 接收器。
+        _timer = new System.Threading.Timer(
+            OnTimerTick, null,
+            TimeSpan.FromSeconds(_config.Interval),
+            TimeSpan.FromSeconds(_config.Interval));
     }
 
     public void RefreshNow()
@@ -55,7 +59,10 @@ public sealed class BatteryService : IDisposable
     {
         if (_isDisposed) return;
 
-        string deviceName = "PRO X Wireless";
+        // 一次读取失败时可能仍能从历史恢复电量，型号也应保留最近一次成功读取的值。
+        string deviceName = string.IsNullOrWhiteSpace(CurrentSnapshot.DeviceName)
+            ? "罗技设备"
+            : CurrentSnapshot.DeviceName;
         int percent = -1;
         bool isCharging = false;
         string statusText = "放电中";
@@ -81,7 +88,7 @@ public sealed class BatteryService : IDisposable
                     string output = p.StandardOutput.ReadToEnd();
                     p.WaitForExit(3000);
 
-                    // 严谨正则解析：匹配 "PRO X Wireless: 89% · 放电中 · 满"
+                    // 严谨正则解析：匹配 "G304 Lightspeed Wireless Gaming Mouse: 89% · 放电中"
                     foreach (string rawLine in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                     {
                         string line = rawLine.Trim();

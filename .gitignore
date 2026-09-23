@@ -25,7 +25,6 @@ __pycache__/
 /*.py
 /*.png
 /*.bat
-!启动.bat
 
 # ---- Local dev probes (not part of the shipped app) ----
 /dwmtest/

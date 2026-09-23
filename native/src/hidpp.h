@@ -21,14 +21,15 @@ constexpr uint8_t  kHidppLong       = 0x11;
 
 constexpr uint16_t kFeatureRoot             = 0x0000;
 constexpr uint16_t kFeatureDeviceName       = 0x0005;
-constexpr uint16_t kFeatureBatteryVoltage   = 0x1000;
-constexpr uint16_t kFeatureBatteryPercent   = 0x1001;
+constexpr uint16_t kFeatureBatteryStatus    = 0x1000;
+constexpr uint16_t kFeatureBatteryVoltage   = 0x1001;
 constexpr uint16_t kFeatureUnifiedBattery   = 0x1004;
 
 // function **序号**（不是内核写法里那个已左移的字节值）
-constexpr uint8_t kFnGetFeature      = 0x0;
-constexpr uint8_t kFnGetCapabilities = 0x0;
-constexpr uint8_t kFnGetStatus       = 0x1;
+constexpr uint8_t kFnGetFeature             = 0x0;
+constexpr uint8_t kFnGetCapabilities         = 0x0;
+constexpr uint8_t kFnGetStatus               = 0x1;
+constexpr uint8_t kFnBatteryStatusGetStatus  = 0x0;
 constexpr uint8_t kFnNameLength      = 0x0;
 constexpr uint8_t kFnNameChunk       = 0x1;
 
@@ -75,6 +76,37 @@ inline std::string ChargingText(int state) {
             return buf;
         }
     }
+}
+
+// BatteryStatus(0x1000) 状态码（与 UnifiedBattery 的状态码不同）。
+// 转成统一内部状态，便于历史与通知共用一套判断。
+inline int NormalizeBatteryStatus(int status) {
+    switch (status) {
+        case 0: return 0;  // discharging
+        case 1: return 1;  // recharging
+        case 2: return 1;  // almost full, still charging
+        case 3: return 3;  // full
+        case 4: return 2;  // slow recharge
+        case 5: case 6: return 4;  // invalid battery / thermal error
+        default: return 0xFF;
+    }
+}
+
+inline std::string BatteryStatusText(int status) {
+    switch (status) {
+        case 0: return u8"放电中";
+        case 1: return u8"充电中";
+        case 2: return u8"充电中（接近充满）";
+        case 3: return u8"已充满";
+        case 4: return u8"充电中（慢充）";
+        case 5: return u8"电池异常";
+        case 6: return u8"温度异常";
+        default: return u8"未知电池状态";
+    }
+}
+
+inline bool IsChargingState(int state) {
+    return state == 1 || state == 2;
 }
 
 // 电量档位位掩码（内核 FLAG_UNIFIED_BATTERY_LEVEL_*）

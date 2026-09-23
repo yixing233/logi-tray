@@ -28,11 +28,8 @@ public sealed class MouseBatteryDetailsWindow : Window
     private const double CardWidth = 232;
     private const double CardCornerRadius = 8;
 
-    /// <summary>
-    /// 卡片底边与任务栏之间的留白。托盘图标上方一大片区域若贴得太近会显得压住通知区域，
-    /// 这里留出更明显的间距，视觉上与托盘图标分离。
-    /// </summary>
-    private const int SpacingAboveTaskbar = 16;
+    /// <summary>卡片底边与任务栏之间的留白（WPF 单位）。</summary>
+    private const int SpacingAboveTaskbar = 8;
 
     private readonly Border _cardBorder;
     private readonly StackPanel _rootPanel;
@@ -88,7 +85,12 @@ public sealed class MouseBatteryDetailsWindow : Window
 
         Content = _cardBorder;
 
-        SourceInitialized += (_, _) => ThemeService.ApplyAcrylicBackdrop(this);
+        SourceInitialized += (_, _) =>
+        {
+            ThemeService.ApplyAcrylicBackdrop(this);
+            // 窗口句柄创建后才能取得目标 DPI；首次 Show 前的预定位再按实际比例校正。
+            AdjustVerticalPosition();
+        };
 
         // ContentRendered 在一次窗口生命周期内只会触发一次，仅靠它校正会让
         // 「第二次从托盘菜单打开」沿用上一次的定位。这里改为多路兜底：
@@ -150,11 +152,18 @@ public sealed class MouseBatteryDetailsWindow : Window
         _anchorX = anchorX;
         _hasAnchor = true;
 
+        // Win32 返回的锚点与托盘溢出面板矩形是物理像素；WPF 窗口位置、工作区和尺寸是 DIP。
+        // 混用会让高 DPI 下的锚点被当成 DIP，最终卡片被钳制到屏幕边缘。
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
+        double scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
+        double anchorDipX = anchorX / scaleX;
+
         var wa = SystemParameters.WorkArea;
         double minLeft = wa.Left + 8;
         double maxLeft = wa.Right - CardWidth - 8;
 
-        double left = Math.Clamp(anchorX - (CardWidth / 2.0), minLeft, maxLeft);
+        double left = Math.Clamp(anchorDipX - (CardWidth / 2.0), minLeft, maxLeft);
         double top = Math.Max(wa.Top + 8, wa.Bottom - SpacingAboveTaskbar - cardHeight);
 
         // 任务栏的 "^" 隐藏图标浮出面板展开时，鼠标停在面板里的图标上，按鼠标位置
@@ -162,15 +171,19 @@ public sealed class MouseBatteryDetailsWindow : Window
         if (UnmanagedMethods.TryGetOverflowPanelRect(out var panel))
         {
             const double Gap = 8;
-            bool verticalOverlap = top < panel.Bottom && (top + cardHeight) > panel.Top;
-            bool horizontalOverlap = left < panel.Right && (left + CardWidth) > panel.Left;
+            double panelLeft = panel.Left / scaleX;
+            double panelTop = panel.Top / scaleY;
+            double panelRight = panel.Right / scaleX;
+            double panelBottom = panel.Bottom / scaleY;
+            bool verticalOverlap = top < panelBottom && (top + cardHeight) > panelTop;
+            bool horizontalOverlap = left < panelRight && (left + CardWidth) > panelLeft;
 
             if (verticalOverlap && horizontalOverlap)
             {
                 left = Math.Clamp(
-                    panel.Left + (((panel.Right - panel.Left) - CardWidth) / 2.0),
+                    panelLeft + (((panelRight - panelLeft) - CardWidth) / 2.0),
                     minLeft, maxLeft);
-                top = Math.Max(wa.Top + 8, panel.Top - Gap - cardHeight);
+                top = Math.Max(wa.Top + 8, panelTop - Gap - cardHeight);
             }
         }
 
@@ -754,8 +767,10 @@ public sealed class MouseBatteryDetailsWindow : Window
         if (justPressed)
         {
             UnmanagedMethods.GetCursorPos(out var pt);
-            var rect = new Rect(Left, Top, ActualWidth, ActualHeight);
-            if (!rect.Contains(new Point(pt.X, pt.Y)))
+            // GetCursorPos 返回屏幕物理像素；先转换为窗口本地 WPF 坐标，避免高 DPI 下误判卡片内点击。
+            Point localPoint = PointFromScreen(new Point(pt.X, pt.Y));
+            var rect = new Rect(0, 0, ActualWidth, ActualHeight);
+            if (!rect.Contains(localPoint))
             {
                 Hide();
                 _outsideClickTimer.Stop();

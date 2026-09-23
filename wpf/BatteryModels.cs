@@ -10,7 +10,7 @@ public record HourlyBucket(string HourText, int Percent, int Count, bool IsSleep
 
 public class BatterySnapshot
 {
-    public string DeviceName { get; set; } = "PRO X Wireless";
+    public string DeviceName { get; set; } = "罗技设备";
     public int Percent { get; set; } = -1;
     public bool IsCharging { get; set; }
     public bool IsConnected { get; set; } = true;
@@ -24,7 +24,7 @@ public class BatterySnapshot
     public int MaxPercent { get; set; } = -1;
     public List<HourlyBucket> HourlyBuckets { get; set; } = new();
 
-    public static BatterySnapshot Offline(string deviceName = "PRO X Wireless") => new()
+    public static BatterySnapshot Offline(string deviceName = "罗技设备") => new()
     {
         DeviceName = deviceName,
         Percent = -1,

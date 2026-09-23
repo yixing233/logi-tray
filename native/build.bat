@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM  build.bat - Build native mouse-tray with the local MSVC toolchain
+REM  build.bat - Build the native HID++ reader with the local MSVC toolchain
 REM
 REM  NOTE: This file is deliberately ASCII-only.
 REM  cmd.exe parses .bat files using the OEM code page (GBK on this machine),
@@ -35,6 +35,7 @@ REM ---- Locate MSVC environment
 set "VCVARS="
 for %%P in (
   "C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+  "E:\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
   "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
   "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
   "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
@@ -61,7 +62,7 @@ if errorlevel 1 (
 )
 
 REM ---- Source files (added stage by stage)
-set "SOURCES=%SRC%\main.cpp %SRC%\hidpp.cpp %SRC%\util.cpp %SRC%\battery_history.cpp %SRC%\alerts.cpp %SRC%\glass_renderer.cpp %SRC%\capture.cpp %SRC%\tray.cpp %SRC%\config.cpp %SRC%\app.cpp %SRC%\popup.cpp %SRC%\settings_window.cpp"
+set "SOURCES=%SRC%\main.cpp %SRC%\hidpp.cpp %SRC%\util.cpp"
 
 REM ---- Compiler flags
 REM   /utf-8   sources are UTF-8 (Chinese comments); without this MSVC
@@ -75,7 +76,7 @@ REM            std::min / std::max and even argument lists
 set "CFLAGS=/nologo /utf-8 /W4 /std:c++17 /EHsc /DNOMINMAX /DWIN32_LEAN_AND_MEAN %OPT% /I"%SRC%""
 
 REM ---- Libraries
-set "LIBS=hid.lib setupapi.lib user32.lib gdi32.lib shell32.lib shlwapi.lib ole32.lib advapi32.lib d3d11.lib dxgi.lib d3dcompiler.lib dwmapi.lib msimg32.lib userenv.lib gdiplus.lib comctl32.lib"
+set "LIBS=hid.lib setupapi.lib"
 
 echo [1/1] compiling...
 cl %CFLAGS% /Fo"%OBJ%\\" /Fe"%OUT%\%OUTNAME%" %SOURCES% /link %LIBS%
