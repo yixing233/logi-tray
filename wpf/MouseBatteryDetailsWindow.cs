@@ -713,6 +713,35 @@ public sealed class MouseBatteryDetailsWindow : Window
         double targetBottom = wa.Bottom - SpacingAboveTaskbar;
         double top = Math.Max(wa.Top + 8, targetBottom - cardHeight);
 
+        // 任务栏的 "^" 隐藏图标浮出面板展开时，鼠标在面板里的图标上，卡片会正好压住
+        // 整个面板。检测到面板就把卡片让到面板旁边，保证面板仍然完整可见可点。
+        if (UnmanagedMethods.TryGetOverflowPanelRect(out var panel))
+        {
+            const double Gap = 8;
+            bool verticalOverlap = top < panel.Bottom && (top + cardHeight) > panel.Top;
+            bool horizontalOverlap = left < panel.Right && (left + CardWidth) > panel.Left;
+
+            if (verticalOverlap && horizontalOverlap)
+            {
+                double rightSide = panel.Right + Gap;
+                double leftSide = panel.Left - Gap - CardWidth;
+
+                if (rightSide + CardWidth <= wa.Right - 8)
+                {
+                    left = rightSide;
+                }
+                else if (leftSide >= wa.Left + 8)
+                {
+                    left = leftSide;
+                }
+                else
+                {
+                    // 两侧都放不下（极窄屏）：保持原位置，至少垂直方向已让开任务栏
+                    left = Math.Clamp(left, minLeft, maxLeft);
+                }
+            }
+        }
+
         Left = left;
         Top = top;
     }

@@ -95,6 +95,23 @@ public static class UnmanagedMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetCursorPos(out POINT lpPoint);
 
+    /// <summary>
+    /// 托盘图标标识。Shell_NotifyIconGetRect 用它查询图标自身的屏幕矩形，
+    /// 比用鼠标位置可靠：从隐藏图标浮出面板点开时，鼠标已经在面板内部了。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct NOTIFYICONIDENTIFIER
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public int uID;
+        public Guid guidItem;
+    }
+
+    [DllImport("shell32.dll", SetLastError = true)]
+    public static extern int Shell_NotifyIconGetRect(
+        ref NOTIFYICONIDENTIFIER identifier, out RECT iconLocation);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -118,4 +135,56 @@ public static class UnmanagedMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     public static extern bool DestroyIcon(IntPtr handle);
+
+    /// <summary>隐藏图标浮出面板（点击任务栏 "^" 展开的那个）的窗口类名。</summary>
+    public const string OverflowPanelClassName = "TopLevelWindowForOverflowXamlIsland";
+
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+    /// <summary>
+    /// 取隐藏图标浮出面板的屏幕矩形（物理像素）。面板展开时悬在任务栏上方，
+    /// 详情卡片若不避开就会把整个托盘面板盖住。
+    /// </summary>
+    public static bool TryGetOverflowPanelRect(out RECT rect)
+    {
+        RECT found = default;
+        bool hit = false;
+
+        EnumWindows((hwnd, _) =>
+        {
+            if (!IsWindowVisible(hwnd))
+            {
+                return true;
+            }
+
+            var cls = new System.Text.StringBuilder(256);
+            GetClassName(hwnd, cls, cls.Capacity);
+            if (cls.ToString() != OverflowPanelClassName)
+            {
+                return true;
+            }
+
+            if (GetWindowRect(hwnd, out RECT r))
+            {
+                found = r;
+                hit = true;
+            }
+
+            return false;
+        }, IntPtr.Zero);
+
+        rect = found;
+        return hit;
+    }
 }
