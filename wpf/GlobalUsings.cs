@@ -1,0 +1,24 @@
+global using System;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Threading.Tasks;
+global using System.Windows;
+global using System.Windows.Controls;
+global using System.Windows.Controls.Primitives;
+global using System.Windows.Data;
+global using System.Windows.Input;
+global using System.Windows.Media;
+
+global using Color = System.Windows.Media.Color;
+global using Brush = System.Windows.Media.Brush;
+global using Brushes = System.Windows.Media.Brushes;
+global using Application = System.Windows.Application;
+global using Cursors = System.Windows.Input.Cursors;
+global using Orientation = System.Windows.Controls.Orientation;
+global using HorizontalAlignment = System.Windows.HorizontalAlignment;
+global using VerticalAlignment = System.Windows.VerticalAlignment;
+global using Button = System.Windows.Controls.Button;
+global using CheckBox = System.Windows.Controls.CheckBox;
+global using Point = System.Windows.Point;
+global using Size = System.Windows.Size;

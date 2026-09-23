@@ -1,0 +1,23 @@
+# Visual Studio / .NET
+bin/
+obj/
+publish/
+release/
+*.user
+*.suo
+.vs/
+
+# Runtime and caches
+*.cache
+history.json
+settings.json
+*.log
+*.tmp
+__pycache__/
+
+# Root temporary scripts and screenshots
+*.py
+/*.png
+*.bat
+!启动.bat
+!assets/**

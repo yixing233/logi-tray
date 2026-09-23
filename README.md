@@ -1,0 +1,147 @@
+<p align="center">
+  <img src="assets/logo.png" alt="logi-tray logo" width="128" height="128" />
+</p>
+
+<h1 align="center">logi-tray</h1>
+
+<p align="center">
+  <strong>优雅、极简、现代的 Windows 11 罗技无线鼠标电量托盘与实时 DWM 亚克力监视器</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/yixing233/logi-tray/releases/latest"><img src="https://img.shields.io/github/v/release/yixing233/logi-tray?style=flat-square&color=0078D4" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/.NET-8.0%20WPF-512BD4?style=flat-square" alt=".NET 8">
+  <img src="https://img.shields.io/badge/C%2B%2B-HID%2B%2B%202.0-00599C?style=flat-square" alt="C++">
+</p>
+
+<p align="center">
+  无需安装笨重缓慢的 Logitech G HUB，直接在 Windows 任务栏实时掌控鼠标真实电量、放电速率、续航时间与 24 小时电量轨迹。
+</p>
+
+---
+
+## ✨ 核心特性
+
+- 🖱️ **通用罗技硬件支持（基于 HID++ 2.0 工业协议）**
+  - 免配对、免配置，自动扫描罗技专属 `VID: 0x046D` 与 `UsagePage: 0xFF00` 通道；
+  - 动态识别设备真实型号（如 *PRO X Wireless*、*GPW 1/2/3 代*、*G502 LIGHTSPEED*、*MX Master 3S* 等）；
+  - 全面支持 Lightspeed、Unifying（优联）、Bolt 接收器及有线直连双模。
+- 🎨 **三种任务栏托盘图标样式自由切换**
+  - 🔋 **电池胶囊**：纯图形横向圆角电池，10% 步进纯色平滑填充，随电量多段变色（绿 -> 黄 -> 橙 -> 红）；
+  - ⭕ **环形进度**：饱满加粗 3.0px 动感圆环，顺时针展开电量弧线，远视距极度醒目，支持充电闪电指示；
+  - 🔢 **纯数字**：大号粗体实时百分比数字，附带底部 2px 细微比例横轨，超远视距一眼可辨。
+- 🪟 **原生 Windows 11 DWM 硬件级实时亚克力卡片**
+  - 左键点击托盘图标：毫秒级呼出毛玻璃详情卡片，底层窗口与桌面壁纸虚化漫射透出；
+  - 搭载专为深浅色背景研发的高辨识度 **「科技天青蓝（Tech Sky Blue）」** 色彩体系，告别传统发灰发暗的字体；
+  - 智能自适应底部贴合算法：卡片随内容长短动态收缩，底部到任务栏顶部**恒定保持 8px 黄金间距**。
+- 📊 **智能时序 24 小时连续电量直方图**
+  - **休眠前向继承（Forward Fill）**：休眠期间沿用休眠前电量并呈现 40% 柔和微透柱，**彻底消灭断崖式归零**；
+  - **36px 高饱满度 + 绝对等距**：每根柱宽严格固定 7px、间隙严格固定 2px，均匀如琴键；
+  - **智能微放电坡度放大**：自动展开日常微放电斜率，直观呈现电量递减过程；
+  - 起止整点清晰标示（如 `17:00` ... `现在`）。
+- 🌓 **全功能外观主题自适应**
+  - 支持 **💻 跟随系统**、**☀️ 浅色模式**、**🌙 深色模式** 实时热切换；
+  - 深色模式搭载 Windows 11 `DWMWA_USE_IMMERSIVE_DARK_MODE` 与黑曜石暗夜亚克力，搭配纯白高对比文字与发光天青蓝标头；
+  - 提供 **「启用亚克力毛玻璃背景」开关**，可一键切换为极简纯色底板。
+- 🔔 **低电量桌面预警与阈值管理**
+  - 原生 Fluent 无级滑块，支持自由设置低电量（如 20%）及严重低电量（如 10%）阈值；
+  - 醒目的 Fluent 胶囊徽章指示，支持 Windows 系统桌面通知。
+
+---
+
+## 📸 界面预览
+
+| 浅色模式亚克力卡片 | 深色模式亚克力卡片 |
+| :---: | :---: |
+| <img src="assets/card_light.png" width="300" /> | <img src="assets/card_dark.png" width="300" /> |
+
+| 任务栏托盘实测（环形进度 / 电池胶囊） | 现代 Fluent 设置中心 |
+| :---: | :---: |
+| <img src="assets/tray_ring.png" width="420" /><br/><br/><img src="assets/tray_battery.png" width="420" /> | <img src="assets/settings.png" width="360" /> |
+
+---
+
+## 🚀 下载与安装
+
+### 前置依赖：.NET 8 桌面运行时
+
+logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时。绝大多数 Windows 11 已预装；若未安装，请先下载：
+
+> **📥 [.NET Desktop Runtime 8.0 (x64) 官方下载](https://dotnet.microsoft.com/zh-cn/download/dotnet/8.0)**
+>
+> 打开页面后选择：**.NET Desktop Runtime 8.0.x → Windows → x64**
+
+安装脚本会自动检测该运行时，缺失时会提示并引导你前往下载页面。
+
+### 下载应用本体
+
+前往 **[Releases 最新发布页面](https://github.com/yixing233/logi-tray/releases/latest)** 下载：
+
+- 文件名：`logi-tray-v1.0.0.zip`（约 1.6 MB）
+- 内含 WPF 主程序、C++ 原生 HID++ 探测引擎、Lucide 矢量图标字体与全部自动化脚本。
+
+### 安装方式
+
+解压后，包内已附带全自动脚本：
+
+- **`一键安装.bat`**：自动检测 .NET 8 运行时 → 部署至 `%LOCALAPPDATA%\Programs\logi-tray` → 创建开始菜单与桌面快捷方式 → 配置任务栏托盘常驻可见 → 立即启动（**全程无需管理员 UAC 提权**）；
+- **`安装并开机自启.bat`**：在安装基础上额外写入 Windows 开机自动启动项；
+- **`卸载.bat`**：一键干净清除进程、自启项、快捷方式、程序文件与托盘注册记录。
+
+> 也可以直接双击 `logi-tray.exe` 绿色便携运行，不写入任何系统位置。
+
+---
+
+## 🛠️ 兼容设备列表（通用支持）
+
+基于罗技官方底层工业级 **HID++ 2.0 协议规范**，程序动态枚举 USB/HID 节点并发送 `0x1004` (UnifiedBattery) 电量查询，包括但不限于以下设备：
+
+- **罗技 G 系列游戏无线鼠标**：
+  - PRO Wireless (GPW 狗屁王一代)
+  - PRO X SUPERLIGHT (GPW 二代)
+  - PRO X SUPERLIGHT 2 / DEX (GPW 三代)
+  - G502 LIGHTSPEED / G502 X PLUS / G502 X LIGHTSPEED
+  - G304 / G305 LIGHTSPEED
+  - G703 / G903 / G604 / G603 LIGHTSPEED
+- **罗技 MX 办公/人体工学无线鼠标**：
+  - MX Master 2S / 3 / 3S
+  - MX Anywhere 2S / 3 / 3S
+  - MX Vertical / Lift 人体工学鼠标
+  - MX Ergo 轨迹球鼠标
+- **双模与充电直连**：无线鼠标插上 USB 线充电时，程序无缝识别直连通道并实时显示“正在充电 ⚡”。
+
+---
+
+## 💻 源码编译指南
+
+### 环境要求
+- Windows 10 (21H2+) 或 Windows 11
+- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- Visual Studio 2022 或 C++ 编译器（MSVC / Clang）
+
+### 编译前端 WPF 界面
+```powershell
+# 克隆仓库
+git clone https://github.com/yixing233/logi-tray.git
+cd logi-tray
+
+# 编译主程序 (生成至 wpf/bin/Release/net8.0-windows/)
+dotnet build wpf/MouseBatteryTray.csproj -c Release
+```
+
+### 编译原生 C++ 探测器
+```powershell
+cd native
+mkdir build && cd build
+cmake ..
+cmake --build . --config Release
+```
+
+---
+
+## 📄 开源许可证
+
+本项目基于 [MIT License](LICENSE) 开源。
+欢迎提交 Issue 和 Pull Request 一起让它更加完善！
