@@ -42,7 +42,7 @@ public static class Program
         TrayIconManager? trayManager = null;
         BatteryService? batteryService = null;
 
-        void ShowDetails()
+        void ShowDetailsAt(int anchorX, int anchorY)
         {
             if (detailsWin == null)
             {
@@ -54,9 +54,9 @@ public static class Program
                 detailsWin.UpdateData(batteryService.CurrentSnapshot);
             }
 
-            // 获得鼠标当前位置作为对齐锚点
-            UnmanagedMethods.GetCursorPos(out var pt);
-            detailsWin.ToggleNear(pt.X, pt.Y);
+            // 锚点优先使用托盘图标被按下时的光标位置：右键菜单弹出后菜单自身会位移，
+            // 此时取 GetCursorPos 会把卡片定到菜单项那个错误的位置上。
+            detailsWin.ToggleNear(anchorX, anchorY);
         }
 
         void ShowSettings()
@@ -97,7 +97,7 @@ public static class Program
         }
 
         batteryService = new BatteryService(config);
-        trayManager = new TrayIconManager(ShowDetails, ShowSettings, ExitApp, config.TrayIconStyle, style =>
+        trayManager = new TrayIconManager(ShowDetailsAt, ShowSettings, ExitApp, config.TrayIconStyle, style =>
         {
             config.TrayIconStyle = style;
             config.Save();
@@ -148,7 +148,7 @@ public static class Program
                     pt.X = (int)SystemParameters.PrimaryScreenWidth - 40;
                     pt.Y = (int)SystemParameters.PrimaryScreenHeight - 40;
                 }
-                ShowDetails();
+                ShowDetailsAt(pt.X, pt.Y);
             }
 
             if (showSettingsOnStart)

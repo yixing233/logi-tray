@@ -21,7 +21,7 @@ public sealed class TrayIconManager : IDisposable
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _contextMenu;
-    private readonly Action _onShowDetails;
+    private readonly Action<int, int> _onShowDetails;
     private readonly Action _onShowSettings;
     private readonly Action _onExit;
     private readonly Action<string>? _onStyleChanged;
@@ -30,6 +30,12 @@ public sealed class TrayIconManager : IDisposable
     private int _lastPercent = -999;
     private bool _lastCharging;
     private string _currentStyle = "battery";
+
+    // 托盘图标被按下那一刻的光标位置。右键菜单弹出后菜单会为避开屏幕边缘而位移，
+    // 此时再取 GetCursorPos 得到的是菜单项坐标，会让详情卡片锚到错误的位置。
+    private int _anchorX;
+    private int _anchorY;
+    private bool _hasAnchor;
 
     private readonly ToolStripMenuItem _itemBattery;
     private readonly ToolStripMenuItem _itemRing;
@@ -41,7 +47,39 @@ public sealed class TrayIconManager : IDisposable
 
     public string CurrentStyle => _currentStyle;
 
-    public TrayIconManager(Action onShowDetails, Action onShowSettings, Action onExit,
+    /// <summary>托盘图标锚点的 X（物理像素）。没有有效锚点时回退到当前光标。</summary>
+    private int AnchorX => _hasAnchor ? _anchorX : CurrentCursorX();
+
+    /// <summary>托盘图标锚点的 Y（物理像素）。</summary>
+    private int AnchorY => _hasAnchor ? _anchorY : CurrentCursorY();
+
+    private static int CurrentCursorX()
+    {
+        UnmanagedMethods.GetCursorPos(out var pt);
+        return pt.X;
+    }
+
+    private static int CurrentCursorY()
+    {
+        UnmanagedMethods.GetCursorPos(out var pt);
+        return pt.Y;
+    }
+
+    /// <summary>
+    /// 记录锚点。鼠标按下与菜单 Opening 时都直接读光标，此刻菜单尚未弹出，
+    /// 取到的就是托盘图标的真实位置。
+    /// </summary>
+    private void CaptureAnchor()
+    {
+        if (UnmanagedMethods.GetCursorPos(out var pt))
+        {
+            _anchorX = pt.X;
+            _anchorY = pt.Y;
+            _hasAnchor = true;
+        }
+    }
+
+    public TrayIconManager(Action<int, int> onShowDetails, Action onShowSettings, Action onExit,
                            string initialStyle = "battery", Action<string>? onStyleChanged = null,
                            Action<string>? onThemeModeChanged = null)
     {
@@ -58,7 +96,7 @@ public sealed class TrayIconManager : IDisposable
         };
 
         var detailsItem = new ToolStripMenuItem("显示详情");
-        detailsItem.Click += (_, _) => _onShowDetails();
+        detailsItem.Click += (_, _) => _onShowDetails(AnchorX, AnchorY);
         _contextMenu.Items.Add(detailsItem);
 
         var settingsItem = new ToolStripMenuItem("设置...");
@@ -117,9 +155,13 @@ public sealed class TrayIconManager : IDisposable
         {
             if (e.Button == MouseButtons.Left)
             {
-                _onShowDetails();
+                _onShowDetails(AnchorX, AnchorY);
             }
         };
+
+        // 在菜单弹出之前抓取光标：这是托盘图标所在的位置，也是唯一可靠的锚点。
+        _notifyIcon.MouseDown += (_, _) => CaptureAnchor();
+        _contextMenu.Opening += (_, _) => CaptureAnchor();
 
         UpdateStyleChecks();
         UpdateThemeChecks();

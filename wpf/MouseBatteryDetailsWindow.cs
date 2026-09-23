@@ -35,6 +35,7 @@ public sealed class MouseBatteryDetailsWindow : Window
     private readonly Action? _onOpenSettings;
     private BatterySnapshot? _lastSnapshot;
     private bool _wasPrimaryButtonDown;
+    private bool _adjustingPosition;
 
     public MouseBatteryDetailsWindow(Action? onOpenSettings = null)
     {
@@ -79,10 +80,18 @@ public sealed class MouseBatteryDetailsWindow : Window
         Content = _cardBorder;
 
         SourceInitialized += (_, _) => ThemeService.ApplyAcrylicBackdrop(this);
-        ContentRendered += (_, _) =>
+
+        // ContentRendered 在一次窗口生命周期内只会触发一次，仅靠它校正会让
+        // 「第二次从托盘菜单打开」沿用上一次的定位。这里改为多路兜底：
+        // SizeChanged 覆盖内容高度变化，IsVisibleChanged 覆盖每一次重新显示。
+        ContentRendered += (_, _) => ThemeService.ApplyAcrylicBackdrop(this);
+        SizeChanged += (_, _) => AdjustVerticalPosition();
+        IsVisibleChanged += (_, e) =>
         {
-            ThemeService.ApplyAcrylicBackdrop(this);
-            AdjustVerticalPosition();
+            if (e.NewValue is true)
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Loaded, AdjustVerticalPosition);
+            }
         };
 
         _outsideClickTimer = new DispatcherTimer(DispatcherPriority.Input)
@@ -94,13 +103,36 @@ public sealed class MouseBatteryDetailsWindow : Window
         ThemeService.ThemeChanged += OnThemeChanged;
     }
 
+    /// <summary>
+    /// 让卡片底边始终贴在任务栏上方，每次重新显示 / 内容高度变化后都要重新贴一次。
+    /// 依赖实际布局高度而非预估高度，避免算矮后压住托盘图标。
+    /// </summary>
     private void AdjustVerticalPosition()
     {
+        if (_adjustingPosition)
+        {
+            return;
+        }
+
         double currentHeight = ActualHeight > 0 ? ActualHeight : DesiredSize.Height;
-        if (currentHeight > 0)
+        if (currentHeight <= 0)
+        {
+            return;
+        }
+
+        _adjustingPosition = true;
+        try
         {
             var wa = SystemParameters.WorkArea;
-            Top = Math.Max(wa.Top + 8, wa.Bottom - SpacingAboveTaskbar - currentHeight);
+            double targetTop = Math.Max(wa.Top + 8, wa.Bottom - SpacingAboveTaskbar - currentHeight);
+            if (Math.Abs(Top - targetTop) > 0.5)
+            {
+                Top = targetTop;
+            }
+        }
+        finally
+        {
+            _adjustingPosition = false;
         }
     }
 
