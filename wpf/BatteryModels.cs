@@ -68,6 +68,18 @@ public class SettingsConfig
         "logi-tray",
         "settings.json");
 
+    /// <summary>配置文件（含旧版迁移路径）是否已存在。</summary>
+    public static bool ConfigExists()
+    {
+        if (File.Exists(ConfigPath)) return true;
+
+        string oldPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "MouseBatteryTray",
+            "settings.json");
+        return File.Exists(oldPath);
+    }
+
     public static SettingsConfig Load()
     {
         try

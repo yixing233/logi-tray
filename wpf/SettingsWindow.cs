@@ -34,6 +34,8 @@ public sealed class SettingsWindow : Window
     private Border _critBadge = null!;
     private CheckBox _notifyToggle = null!;
     private CheckBox _acrylicToggle = null!;
+    private CheckBox _autoStartToggle = null!;
+    private TextBlock _autoStartDesc = null!;
     private int _selectedInterval;
     private string _selectedStyle;
     private string _selectedThemeMode;
@@ -504,6 +506,57 @@ public sealed class SettingsWindow : Window
         acrylicBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeCardBorder");
         sp.Children.Add(acrylicBorder);
 
+        // 开机自启卡片
+        var autoStartCardGrid = new Grid { Margin = new Thickness(12, 10, 12, 10) };
+        autoStartCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        autoStartCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var autoStartTextPanel = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        var autoStartTitle = new TextBlock
+        {
+            Text = "开机自动启动",
+            FontSize = 12.5,
+            FontWeight = FontWeights.Medium
+        };
+        autoStartTitle.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
+        autoStartTextPanel.Children.Add(autoStartTitle);
+
+        _autoStartDesc = new TextBlock
+        {
+            Text = AutoStartService.IsEnabled()
+                ? "登录 Windows 后自动在后台运行，无需手动打开"
+                : "登录 Windows 后不会自动运行，需手动启动",
+            FontSize = 10.5,
+            Margin = new Thickness(0, 2, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        _autoStartDesc.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextSecondary");
+        autoStartTextPanel.Children.Add(_autoStartDesc);
+        autoStartCardGrid.Children.Add(autoStartTextPanel);
+
+        _autoStartToggle = new CheckBox
+        {
+            IsChecked = AutoStartService.IsEnabled(),
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Style = (Style)FindResource("FluentToggleSwitchStyle")
+        };
+        _autoStartToggle.Checked += (_, _) => UpdateAutoStartState(true);
+        _autoStartToggle.Unchecked += (_, _) => UpdateAutoStartState(false);
+        Grid.SetColumn(_autoStartToggle, 1);
+        autoStartCardGrid.Children.Add(_autoStartToggle);
+
+        var autoStartBorder = new Border
+        {
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            Child = autoStartCardGrid,
+            Margin = new Thickness(0, 0, 0, 14)
+        };
+        autoStartBorder.SetResourceReference(Border.BackgroundProperty, "ThemeCardBackground");
+        autoStartBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeCardBorder");
+        sp.Children.Add(autoStartBorder);
+
         // 5. 分组：后台刷新间隔
         var grp4 = new TextBlock
         {
@@ -586,7 +639,19 @@ public sealed class SettingsWindow : Window
             _config.TrayIconStyle = _selectedStyle;
             _config.ThemeMode = _selectedThemeMode;
             _config.AcrylicEnabled = _acrylicToggle.IsChecked ?? true;
+            _config.Autostart = _autoStartToggle.IsChecked ?? false;
             _config.Save();
+
+            // 立即把启动项写入/移出注册表
+            bool applied = AutoStartService.Apply(_config.Autostart);
+            if (!applied)
+            {
+                System.Windows.MessageBox.Show(this,
+                    "写入开机启动项失败，可能是注册表权限受限。\n" +
+                    "程序设置已保存，但开机自启可能不会生效。",
+                    "logi-tray", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+
             _onSaved?.Invoke(_config);
             Close();
         };
@@ -673,6 +738,22 @@ public sealed class SettingsWindow : Window
         });
 
         return sp;
+    }
+
+    /// <summary>
+    /// 勾选/取消开机自启时立即写入或移除注册表启动项，并刷新说明文字。
+    /// </summary>
+    private void UpdateAutoStartState(bool enabled)
+    {
+        bool ok = AutoStartService.Apply(enabled);
+
+        if (_autoStartDesc != null)
+        {
+            _autoStartDesc.Text = enabled
+                ? (ok ? "登录 Windows 后自动在后台运行，无需手动打开"
+                      : "⚠ 写入启动项失败，请检查注册表权限")
+                : "登录 Windows 后不会自动运行，需手动启动";
+        }
     }
 
     private void UpdateBadgeColors()

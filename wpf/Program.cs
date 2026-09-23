@@ -24,9 +24,18 @@ public static class Program
             ShutdownMode = ShutdownMode.OnExplicitShutdown
         };
 
+        bool configExisted = SettingsConfig.ConfigExists();
         var config = SettingsConfig.Load();
         ThemeService.SetThemeMode(config.ThemeMode);
         ThemeService.SetAcrylicEnabled(config.AcrylicEnabled);
+
+        // 对齐开机自启：首次运行沿用安装脚本写入的状态，之后以配置为准
+        config.Autostart = AutoStartService.ResolveInitialState(config.Autostart, configExisted);
+        if (!configExisted)
+        {
+            // 首次运行落盘一次，避免每次都重新探测注册表
+            try { config.Save(); } catch { }
+        }
 
         MouseBatteryDetailsWindow? detailsWin = null;
         SettingsWindow? settingsWin = null;
