@@ -42,6 +42,10 @@ public sealed class MouseBatteryDetailsWindow : Window
     private bool _wasPrimaryButtonDown;
     private bool _adjustingPosition;
 
+    /// <summary>当前锚点的屏幕 X（物理像素）与是否已有有效锚点。</summary>
+    private double _anchorX;
+    private bool _hasAnchor;
+
     public MouseBatteryDetailsWindow(Action? onOpenSettings = null)
     {
         _onOpenSettings = onOpenSettings;
@@ -109,12 +113,13 @@ public sealed class MouseBatteryDetailsWindow : Window
     }
 
     /// <summary>
-    /// 让卡片底边始终贴在任务栏上方，每次重新显示 / 内容高度变化后都要重新贴一次。
-    /// 依赖实际布局高度而非预估高度，避免算矮后压住托盘图标。
+    /// 重新按当前真实高度摆放卡片。每次重新显示 / 内容高度变化后都要调用，
+    /// 否则会沿用上一次的 Top；同时它也是唯一写入 Left/Top 的地方，
+    /// 保证面板避让不会被「贴任务栏」的逻辑覆盖掉。
     /// </summary>
     private void AdjustVerticalPosition()
     {
-        if (_adjustingPosition)
+        if (_adjustingPosition || !_hasAnchor)
         {
             return;
         }
@@ -128,17 +133,49 @@ public sealed class MouseBatteryDetailsWindow : Window
         _adjustingPosition = true;
         try
         {
-            var wa = SystemParameters.WorkArea;
-            double targetTop = Math.Max(wa.Top + 8, wa.Bottom - SpacingAboveTaskbar - currentHeight);
-            if (Math.Abs(Top - targetTop) > 0.5)
-            {
-                Top = targetTop;
-            }
+            ApplyPlacement(_anchorX, currentHeight);
         }
         finally
         {
             _adjustingPosition = false;
         }
+    }
+
+    /// <summary>
+    /// 唯一的定位实现：水平对齐锚点、垂直贴任务栏上方，
+    /// 并在隐藏图标浮出面板展开时整体抬到面板之上。
+    /// </summary>
+    private void ApplyPlacement(double anchorX, double cardHeight)
+    {
+        _anchorX = anchorX;
+        _hasAnchor = true;
+
+        var wa = SystemParameters.WorkArea;
+        double minLeft = wa.Left + 8;
+        double maxLeft = wa.Right - CardWidth - 8;
+
+        double left = Math.Clamp(anchorX - (CardWidth / 2.0), minLeft, maxLeft);
+        double top = Math.Max(wa.Top + 8, wa.Bottom - SpacingAboveTaskbar - cardHeight);
+
+        // 任务栏的 "^" 隐藏图标浮出面板展开时，鼠标停在面板里的图标上，按鼠标位置
+        // 算出的卡片会正好压住整个面板。把卡片整体抬到面板上方，面板保持完整可见。
+        if (UnmanagedMethods.TryGetOverflowPanelRect(out var panel))
+        {
+            const double Gap = 8;
+            bool verticalOverlap = top < panel.Bottom && (top + cardHeight) > panel.Top;
+            bool horizontalOverlap = left < panel.Right && (left + CardWidth) > panel.Left;
+
+            if (verticalOverlap && horizontalOverlap)
+            {
+                left = Math.Clamp(
+                    panel.Left + (((panel.Right - panel.Left) - CardWidth) / 2.0),
+                    minLeft, maxLeft);
+                top = Math.Max(wa.Top + 8, panel.Top - Gap - cardHeight);
+            }
+        }
+
+        Left = left;
+        Top = top;
     }
 
     private void OnThemeChanged()
@@ -694,56 +731,12 @@ public sealed class MouseBatteryDetailsWindow : Window
             Measure(new Size(CardWidth, double.PositiveInfinity));
             double realHeight = DesiredSize.Height > 0 ? DesiredSize.Height : 160;
 
-            PositionNear(screenX, screenY, realHeight);
+            ApplyPlacement(screenX, realHeight);
             Show();
             Activate();
             _wasPrimaryButtonDown = (UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON) & 0x8000) != 0;
             _outsideClickTimer.Start();
         }
-    }
-
-    private void PositionNear(double cursorX, double cursorY, double cardHeight)
-    {
-        var wa = SystemParameters.WorkArea;
-        double left = cursorX - (CardWidth / 2.0);
-        double maxLeft = wa.Right - CardWidth - 8;
-        double minLeft = wa.Left + 8;
-        left = Math.Clamp(left, minLeft, maxLeft);
-
-        double targetBottom = wa.Bottom - SpacingAboveTaskbar;
-        double top = Math.Max(wa.Top + 8, targetBottom - cardHeight);
-
-        // 任务栏的 "^" 隐藏图标浮出面板展开时，鼠标在面板里的图标上，卡片会正好压住
-        // 整个面板。检测到面板就把卡片让到面板旁边，保证面板仍然完整可见可点。
-        if (UnmanagedMethods.TryGetOverflowPanelRect(out var panel))
-        {
-            const double Gap = 8;
-            bool verticalOverlap = top < panel.Bottom && (top + cardHeight) > panel.Top;
-            bool horizontalOverlap = left < panel.Right && (left + CardWidth) > panel.Left;
-
-            if (verticalOverlap && horizontalOverlap)
-            {
-                double rightSide = panel.Right + Gap;
-                double leftSide = panel.Left - Gap - CardWidth;
-
-                if (rightSide + CardWidth <= wa.Right - 8)
-                {
-                    left = rightSide;
-                }
-                else if (leftSide >= wa.Left + 8)
-                {
-                    left = leftSide;
-                }
-                else
-                {
-                    // 两侧都放不下（极窄屏）：保持原位置，至少垂直方向已让开任务栏
-                    left = Math.Clamp(left, minLeft, maxLeft);
-                }
-            }
-        }
-
-        Left = left;
-        Top = top;
     }
 
     private void OutsideClickTimer_Tick(object? sender, EventArgs e)
