@@ -1,4 +1,4 @@
-# Visual Studio / .NET
+# ---- Build output ----
 bin/
 obj/
 publish/
@@ -7,7 +7,13 @@ release/
 *.suo
 .vs/
 
-# Runtime and caches
+# ---- Native build artifacts ----
+native/build/
+*.obj
+*.exe
+*.pdb
+
+# ---- Runtime data & caches ----
 *.cache
 history.json
 settings.json
@@ -15,9 +21,21 @@ settings.json
 *.tmp
 __pycache__/
 
-# Root temporary scripts and screenshots
-*.py
+# ---- Scratch scripts & screenshots at repo root ----
+/*.py
 /*.png
-*.bat
+/*.bat
 !启动.bat
+
+# ---- Local dev probes (not part of the shipped app) ----
+/dwmtest/
+/native_probe/
+/wpf_test/
+
+# ---- Native scratch files (keep build.bat, src/, README.md) ----
+/native/*.py
+/native/*.png
+/native/*.bmp
+
+# ---- Keep README assets ----
 !assets/**
