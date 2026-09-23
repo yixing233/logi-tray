@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/yixing233/logi-tray/releases/latest"><img src="https://img.shields.io/github/v/release/yixing233/logi-tray?style=flat-square&color=0078D4" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/.NET-8.0%20WPF-512BD4?style=flat-square" alt=".NET 8">
   <img src="https://img.shields.io/badge/C%2B%2B-HID%2B%2B%202.0-00599C?style=flat-square" alt="C++">
@@ -156,5 +156,23 @@ cmake --build . --config Release
 
 ## 📄 开源许可证
 
-本项目基于 [MIT License](LICENSE) 开源。
+本项目基于 **[GNU General Public License v3.0](LICENSE)** 开源。
+
+> 这意味着：你可以自由使用、修改和分发本项目，但**任何基于本项目的衍生作品
+> 也必须以 GPL-3.0 开源**，并保留原始版权声明。详见 [LICENSE](LICENSE) 全文。
+
+```
+Copyright (C) 2026 yixing233
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+```
+
 欢迎提交 Issue 和 Pull Request 一起让它更加完善！
