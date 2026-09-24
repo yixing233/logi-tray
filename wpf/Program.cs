@@ -11,8 +11,13 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // 完整版保持原有身份与数据目录，与轻量版完全隔离
+        AppIdentity.Name = "logi-tray";
+        AppIdentity.LegacyDirectoryName = "MouseBatteryTray";
+        AppIdentity.MutexNameOverride = "logi_tray_SingleInstance";
+
         // 单实例检查
-        _singleInstanceMutex = new Mutex(true, "logi_tray_SingleInstance", out bool isNewInstance);
+        _singleInstanceMutex = new Mutex(true, AppIdentity.MutexName, out bool isNewInstance);
         if (!isNewInstance)
         {
             // 已有实例在运行

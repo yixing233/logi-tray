@@ -19,6 +19,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 两个版本共用的源码（单一来源，避免复制分叉） -->
+    <Compile Include="..\shared\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="app.ico" />
     <Content Include="app.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

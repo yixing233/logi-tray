@@ -12,7 +12,9 @@ namespace MouseBatteryTray;
 public static class AutoStartService
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "logi-tray";
+
+    /// <summary>自启项名称随应用身份变化，两版互不覆盖。</summary>
+    private static string ValueName => AppIdentity.AutoStartValueName;
 
     /// <summary>当前可执行文件的完整路径（优先使用真实进程路径，回退到基目录拼接）。</summary>
     public static string ExecutablePath
@@ -26,7 +28,7 @@ public static class AutoStartService
             }
             catch { }
 
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logi-tray.exe");
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, AppIdentity.ExecutableName);
         }
     }
 

@@ -63,21 +63,15 @@ public class SettingsConfig
     [JsonPropertyName("acrylic_enabled")]
     public bool AcrylicEnabled { get; set; } = true;
 
-    public static string ConfigPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "logi-tray",
-        "settings.json");
+    public static string ConfigPath => Path.Combine(AppIdentity.DataDirectory, "settings.json");
 
     /// <summary>配置文件（含旧版迁移路径）是否已存在。</summary>
     public static bool ConfigExists()
     {
         if (File.Exists(ConfigPath)) return true;
 
-        string oldPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "MouseBatteryTray",
-            "settings.json");
-        return File.Exists(oldPath);
+        string? legacy = AppIdentity.LegacyDirectory;
+        return legacy != null && File.Exists(Path.Combine(legacy, "settings.json"));
     }
 
     public static SettingsConfig Load()
@@ -88,11 +82,9 @@ public class SettingsConfig
             if (!File.Exists(path))
             {
                 // 兼容旧路径无缝迁移
-                string oldPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "MouseBatteryTray",
-                    "settings.json");
-                if (File.Exists(oldPath)) path = oldPath;
+                string? legacy = AppIdentity.LegacyDirectory;
+                string? oldPath = legacy == null ? null : Path.Combine(legacy, "settings.json");
+                if (oldPath != null && File.Exists(oldPath)) path = oldPath;
             }
 
             if (File.Exists(path))

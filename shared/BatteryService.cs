@@ -233,19 +233,16 @@ public sealed class BatteryService : IDisposable
 
         try
         {
-            string histDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "logi-tray");
+            string histDir = AppIdentity.DataDirectory;
             string histPath = Path.Combine(histDir, "history.json");
 
-            // 兼容旧版本目录：新路径没有而旧路径有，则迁移一次
+            // 兼容旧版本目录：新路径没有而旧路径有，则迁移一次。
+            // 轻量版不设旧目录，因此不会与完整版的历史相互污染。
             if (!File.Exists(histPath))
             {
-                string oldPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "MouseBatteryTray",
-                    "history.json");
-                if (File.Exists(oldPath))
+                string? legacy = AppIdentity.LegacyDirectory;
+                string? oldPath = legacy == null ? null : Path.Combine(legacy, "history.json");
+                if (oldPath != null && File.Exists(oldPath))
                 {
                     try
                     {
