@@ -390,6 +390,14 @@ internal sealed class SettingsForm : Form
             // 自启失败不应阻止其它设置保存
         }
 
+        // 必须在这里落盘。
+        //
+        // 早先只有 TrayContext.ShowSettings() 在对话框返回 OK 后才调用 Save()，
+        // 因此「从托盘打开」时碰巧能存，「直接打开设置窗口」时全部改动都会丢
+        // （实测：点击保存后配置文件根本不存在）。持久化属于本窗体的职责，
+        // 不能依赖调用方。
+        _settings.Save();
+
         DialogResult = DialogResult.OK;
         Close();
     }

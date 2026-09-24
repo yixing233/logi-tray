@@ -40,12 +40,15 @@ internal static class Program
                     return ProtocolTests.Run();
                 case "--list":
                     return ListDevices();
+                case "--diag-atk":
+                    return AtkDiagnostics.Run();
                 case "--probe-atk":
-                    return AtkProbe.Run();
                 case "--probe-atk-web":
-                    return AtkWebProbe.Run();
                 case "--probe-z87":
-                    return AtkZ87.Run();
+                case "--probe-proto1":
+                case "--probe-transport":
+                    // 旧名称保留，统一转到合并后的诊断工具
+                    return AtkDiagnostics.Run();
                 // 下面两个用于核对界面（平时不需要）：直接打开窗口便于截图检查
                 case "--show-details":
                     return ShowDetailsOnce();
@@ -102,7 +105,7 @@ internal static class Program
         Console.WriteLine("用法:");
         Console.WriteLine("  multi-tray.exe                启动托盘程序");
         Console.WriteLine("  multi-tray.exe --list         列出检测到的设备与当前电量后退出");
-        Console.WriteLine("  multi-tray.exe --probe-atk    排查 ATK 设备的读取通道（打印原始响应）");
+        Console.WriteLine("  multi-tray.exe --diag-atk     诊断 ATK 设备（打印原始收发字节）");
         Console.WriteLine("  multi-tray.exe --test-protocols  运行协议解析层自检（无需硬件）");
         Console.WriteLine("  multi-tray.exe --help         显示本帮助");
     }
@@ -334,7 +337,8 @@ internal sealed class TrayContext : ApplicationContext
         using var form = new SettingsForm(_settings);
         if (form.ShowDialog() == DialogResult.OK)
         {
-            _settings.Save();
+            // 配置已由 SettingsForm.Save() 落盘，这里只同步运行期状态。
+            // 不要在调用方重复保存 —— 那会让「直接打开设置窗口」的路径漏存。
             _dark = ResolveDark();
             _timer.Interval = Math.Max(5, _settings.Interval) * 1000;
             Refresh();

@@ -16,14 +16,19 @@ namespace MultiTray;
 internal sealed class DetailsForm : Form
 {
     private const int CardWidth = 340;
-    private readonly IReadOnlyList<DeviceReading> _readings;
     private readonly bool _dark;
     private readonly MultiSettings _settings;
+
+    /// <summary>当前展示的读数。刷新时就地替换，不重建窗口。</summary>
+    private IReadOnlyList<DeviceReading> _readings;
 
     private readonly Font _titleFont = new("Microsoft YaHei UI", 11f, FontStyle.Bold);
     private readonly Font _nameFont = new("Microsoft YaHei UI", 9.5f);
     private readonly Font _pctFont = new("Microsoft YaHei UI", 16f, FontStyle.Bold);
     private readonly Font _metaFont = new("Microsoft YaHei UI", 8f);
+
+    /// <summary>承载全部内容的滚动面板；刷新时清空并重建其子控件。</summary>
+    private readonly Panel _panel;
 
     public DetailsForm(IReadOnlyList<DeviceReading> readings, bool dark,
                        MultiSettings settings)
@@ -42,6 +47,15 @@ internal sealed class DetailsForm : Form
         BackColor = dark ? Color.FromArgb(32, 32, 32) : Color.White;
         Font = _nameFont;
 
+        _panel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            Padding = new Padding(8),
+            BackColor = BackColor,
+        };
+        Controls.Add(_panel);
+
         Build();
     }
 
@@ -59,14 +73,15 @@ internal sealed class DetailsForm : Form
 
     private void Build()
     {
-        var panel = new Panel
+        var panel = _panel;
+        panel.SuspendLayout();
+
+        // 清空旧内容（刷新时会重新进入这里）
+        foreach (Control c in panel.Controls.Cast<Control>().ToList())
         {
-            Dock = DockStyle.Fill,
-            AutoScroll = true,
-            Padding = new Padding(8),
-            BackColor = BackColor,
-        };
-        Controls.Add(panel);
+            panel.Controls.Remove(c);
+            c.Dispose();
+        }
 
         int y = 8;
 
@@ -135,11 +150,13 @@ internal sealed class DetailsForm : Form
         refresh.FlatAppearance.BorderSize = 1;
         refresh.Click += (_, _) =>
         {
-            var fresh = DeviceReader.ReadAll(_settings);
-            using var next = new DetailsForm(fresh, _dark, _settings);
-            // 就地替换内容：关闭当前窗口并打开新的
-            Close();
-            next.ShowDialog();
+            // 就地刷新：重新读取并重建本窗口内容。
+            //
+            // 早先的写法是 Close() 之后 new 一个窗口再 ShowDialog()，
+            // 这是错的：Close() 会结束外层的模态消息循环，进程随即退出
+            // （实测点击「立即刷新」后进程直接消失）。
+            _readings = DeviceReader.ReadAll(_settings);
+            Build();
         };
         panel.Controls.Add(refresh);
 
@@ -158,6 +175,9 @@ internal sealed class DetailsForm : Form
 
         y += 44;
         ClientSize = new Size(CardWidth + 16, Math.Min(y, 620));
+
+        panel.ResumeLayout(true);
+        panel.PerformLayout();
     }
 
     private Panel BuildCard(DeviceReading r)

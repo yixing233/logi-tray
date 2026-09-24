@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
-
 namespace MultiTray;
 
 /// <summary>
@@ -95,6 +94,8 @@ public static class Hid
     [DllImport("hid.dll")] private static extern bool HidD_SetFeature(
         SafeFileHandle h, byte[] buf, int len);
     [DllImport("hid.dll")] private static extern bool HidD_SetOutputReport(
+        SafeFileHandle h, byte[] buf, int len);
+    [DllImport("hid.dll")] private static extern bool HidD_GetInputReport(
         SafeFileHandle h, byte[] buf, int len);
 
     [DllImport("setupapi.dll", CharSet = CharSet.Unicode)]
@@ -312,6 +313,52 @@ public static class Hid
     }
 
     /// <summary>
+    /// 用控制端点做一次「SET_OUTPUT → 等待 → GET_INPUT」往返。
+    ///
+    /// 为什么需要它：本机 0xFF1C / 0xFFEF 这两个厂商接口用 WriteFile 直接报
+    /// error 87（ERROR_INVALID_PARAMETER），因为它们的输出报告不是通过中断 OUT
+    /// 端点走的，必须走控制端点的 Set_Report。此前的探测全部用 WriteFile，
+    /// 因此这两个接口实际上从未被真正写入过。
+    ///
+    /// 读取同样走控制端点（HidD_GetInputReport），这也是带编号报告设备的常规做法。
+    /// </summary>
+    public static byte[]? ControlRoundTrip(string path, byte[] frame, int readLength,
+                                           int settleMs)
+    {
+        if (readLength <= 0) return null;
+
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, false);
+        if (h.IsInvalid) return null;
+
+        using (h)
+        {
+            if (!HidD_SetOutputReport(h, frame, frame.Length)) return null;
+
+            // 给设备时间把应答准备好
+            if (settleMs > 0) Thread.Sleep(settleMs);
+
+            var buf = new byte[readLength];
+            // GET_INPUT_REPORT 要求首字节是 Report ID
+            buf[0] = frame.Length > 0 ? frame[0] : (byte)0;
+            return HidD_GetInputReport(h, buf, buf.Length) ? buf : null;
+        }
+    }
+
+    /// <summary>只取控制端点的输入报告（不先写）。</summary>
+    public static byte[]? GetInputReport(string path, byte reportId, int length)
+    {
+        if (length <= 1) return null;
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, false);
+        if (h.IsInvalid) return null;
+        using (h)
+        {
+            var buf = new byte[length];
+            buf[0] = reportId;
+            return HidD_GetInputReport(h, buf, buf.Length) ? buf : null;
+        }
+    }
+
+    /// <summary>
     /// 写一帧并等待一帧输入报告，返回读到的字节（无响应返回 null）。
     ///
     /// 顺序很关键：**先挂起读、再写**。厂商协议的回答通常紧跟请求，
@@ -385,6 +432,70 @@ public static class Hid
                 {
                     CancelIo(h);
                     return null;
+                }
+                if (!GetOverlappedResult(h, ref ovr, out int got, false)) return null;
+                if (got <= 0) return null;
+                if (got < buf.Length) Array.Resize(ref buf, got);
+                return buf;
+            }
+            finally
+            {
+                CloseHandle(ev);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 先写一帧、**等待**、再读一帧输入报告。
+    ///
+    /// 与 <see cref="WriteRead"/> 的区别在于「等待」这一步，这是照着上游
+    /// ATK 实现（ATK_tray）的做法加的：它 write 之后 sleep(0.1) 才 read。
+    /// 部分设备在收到请求后需要一点时间才把应答放进输入队列，写后立即读
+    /// 会得到空结果，看起来像「设备不应答」。
+    /// </summary>
+    public static byte[]? WriteThenRead(string path, byte[] frame, int readLength,
+                                        int settleMs, int timeoutMs)
+    {
+        if (readLength <= 0) return null;
+
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, true);
+        if (h.IsInvalid) return null;
+
+        using (h)
+        {
+            IntPtr ev = CreateEvent(IntPtr.Zero, true, false, IntPtr.Zero);
+            if (ev == IntPtr.Zero) return null;
+
+            try
+            {
+                // 先写（同步等待写完）
+                var ovw = new OVERLAPPED { hEvent = ev };
+                if (!WriteFile(h, frame, frame.Length, IntPtr.Zero, ref ovw))
+                {
+                    if (Marshal.GetLastWin32Error() != ERROR_IO_PENDING) return null;
+                    if (WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                    {
+                        CancelIo(h);
+                        return null;
+                    }
+                    if (!GetOverlappedResult(h, ref ovw, out _, false)) return null;
+                }
+                ResetEvent(ev);
+
+                // 关键：给设备留出准备应答的时间
+                if (settleMs > 0) Thread.Sleep(settleMs);
+
+                // 再挂读并等待
+                var buf = new byte[readLength];
+                var ovr = new OVERLAPPED { hEvent = ev };
+                if (!ReadFile(h, buf, buf.Length, IntPtr.Zero, ref ovr))
+                {
+                    if (Marshal.GetLastWin32Error() != ERROR_IO_PENDING) return null;
+                    if (WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                    {
+                        CancelIo(h);
+                        return null;
+                    }
                 }
                 if (!GetOverlappedResult(h, ref ovr, out int got, false)) return null;
                 if (got <= 0) return null;
