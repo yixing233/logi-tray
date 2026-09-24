@@ -12,7 +12,7 @@
     <AssemblyName>logi-tray-lite</AssemblyName>
     <Product>logi-tray-lite</Product>
     <Title>logi-tray-lite</Title>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <RootNamespace>MouseBatteryTray.Lite</RootNamespace>
     <StartupObject>MouseBatteryTray.Lite.Program</StartupObject>
     <ApplicationIcon>app.ico</ApplicationIcon>

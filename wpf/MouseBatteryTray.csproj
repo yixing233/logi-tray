@@ -11,7 +11,7 @@
     <AssemblyName>logi-tray</AssemblyName>
     <Product>logi-tray</Product>
     <Title>logi-tray</Title>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <RootNamespace>MouseBatteryTray</RootNamespace>
     <StartupObject>MouseBatteryTray.Program</StartupObject>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
