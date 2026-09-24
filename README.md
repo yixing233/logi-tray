@@ -207,7 +207,7 @@ build.bat
 ### 打包发布
 
 ```powershell
-python package_release.py
+python tools/package_release.py
 ```
 
 会依次构建两个版本，并分别在 `release/` 下生成 `logi-tray-vX.Y.Z.zip` 与
