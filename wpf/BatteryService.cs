@@ -26,6 +26,22 @@ public sealed class BatteryService : IDisposable
 
     public BatterySnapshot CurrentSnapshot { get; private set; } = new();
 
+    // ---- 历史样本缓存 ----
+    // 原实现每次轮询都要 File.ReadAllText + JsonDocument.Parse 整个 history.json，
+    // 且追加样本时再把整个文件重写一遍。文件只增不减，开销随之线性放大，
+    // 长时间运行后每次轮询的临时分配和磁盘 IO 都会变得很重。
+    // 现在改为：启动时解析一次进内存，之后只在内存里追加，并按需落盘。
+    private readonly List<(double T, int P, bool C)> _samples = new();
+    private bool _samplesLoaded;
+    private string? _historyPath;
+    private DateTime _lastPersistUtc = DateTime.MinValue;
+
+    /// <summary>落盘节流间隔：内存里可以频繁追加，磁盘不必每次都跟着重写。</summary>
+    private static readonly TimeSpan PersistInterval = TimeSpan.FromMinutes(5);
+
+    /// <summary>保留窗口。只用于图表与续航预测，留 48 小时足够，且能防止文件无限增长。</summary>
+    private const double RetainSeconds = 48 * 3600;
+
     public BatteryService(SettingsConfig config)
     {
         _config = config;
@@ -153,11 +169,76 @@ public sealed class BatteryService : IDisposable
 
         try
         {
+            EnsureSamplesLoaded();
+
+            // 设备离线时 _samples 仍可能持有旧版遗留的超大历史，
+            // 因此这里也要走一次裁剪与落盘，否则文件永远不会被压缩。
+            double nowUtcEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+            if (_samples.Count == 0)
+            {
+                // 没有任何历史样本：直接返回，下面的兜底文案稍后统一处理
+            }
+            else
+            {
+                double nowEpoch = nowUtcEpoch;
+
+                if (percent > 0)
+                {
+                    // 距离上个样本超过 20 秒才记录，避免密集轮询把文件撑大
+                    if (nowEpoch - _samples[^1].T >= 20)
+                    {
+                        _samples.Add((nowEpoch, percent, isCharging));
+                    }
+                }
+                else
+                {
+                    // 本次休眠/未读到：平滑回退到最近的有效历史，绝不显示 0% 假报警
+                    var latest = _samples[^1];
+                    snapshot.Percent = latest.P;
+                    snapshot.IsCharging = latest.C;
+                    double elapsed = nowEpoch - latest.T;
+                    snapshot.IsConnected = elapsed < _config.StaleGrace;
+                    if (!snapshot.IsConnected)
+                    {
+                        snapshot.LevelText = "已休眠";
+                    }
+                }
+
+                PruneOldSamples(nowEpoch);
+                MaybePersist(nowEpoch);
+
+                BuildHistoryAnalysis(snapshot, nowEpoch);
+            }
+        }
+        catch { }
+
+        if (string.IsNullOrEmpty(snapshot.RemainingTimeText) || snapshot.RemainingTimeText == "正在估算...")
+        {
+            snapshot.RemainingTimeText = snapshot.IsCharging ? "充电中" : (snapshot.Percent > 0 ? "放电数据积累中" : "设备离线");
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>首次调用时把 history.json 读进内存，之后不再重复解析。</summary>
+    private void EnsureSamplesLoaded()
+    {
+        if (_samplesLoaded)
+        {
+            return;
+        }
+
+        _samplesLoaded = true;
+
+        try
+        {
             string histDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "logi-tray");
             string histPath = Path.Combine(histDir, "history.json");
 
+            // 兼容旧版本目录：新路径没有而旧路径有，则迁移一次
             if (!File.Exists(histPath))
             {
                 string oldPath = Path.Combine(
@@ -175,178 +256,251 @@ public sealed class BatteryService : IDisposable
                 }
             }
 
-            if (File.Exists(histPath))
+            _historyPath = histPath;
+
+            if (!File.Exists(histPath))
             {
-                string json = File.ReadAllText(histPath);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("samples", out var samplesArr))
-                {
-                    var samples = new List<(double t, int p, bool c)>();
-                    foreach (var elem in samplesArr.EnumerateArray())
-                    {
-                        if (elem.TryGetProperty("t", out var tProp) &&
-                            elem.TryGetProperty("percent", out var pProp))
-                        {
-                            bool c = elem.TryGetProperty("charging", out var cProp) && cProp.GetBoolean();
-                            int p = pProp.GetInt32();
-                            if (p > 0 && p <= 100)
-                            {
-                                samples.Add((tProp.GetDouble(), p, c));
-                            }
-                        }
-                    }
-
-                    if (percent > 0)
-                    {
-                        // 若读到了新样本，且距离最后一个样本超过 20 秒，则持久化到 history.json
-                        double nowEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                        if (samples.Count == 0 || (nowEpoch - samples.Last().t) >= 20)
-                        {
-                            samples.Add((nowEpoch, percent, isCharging));
-                            AppendSampleToFile(histPath, nowEpoch, percent, isCharging);
-                        }
-                    }
-                    else if (samples.Count > 0)
-                    {
-                        // 若本次休眠/未读到，平滑回退到最近的有效历史记录，绝对不显示 0% 红色假报警
-                        var latest = samples.Last();
-                        snapshot.Percent = latest.p;
-                        snapshot.IsCharging = latest.c;
-                        double elapsed = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - latest.t;
-                        snapshot.IsConnected = elapsed < _config.StaleGrace;
-                        if (!snapshot.IsConnected)
-                        {
-                            snapshot.LevelText = "已休眠";
-                        }
-                    }
-
-                    if (samples.Count > 0)
-                    {
-                        // 计算 24 小时聚合
-                        double nowEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                        double dayAgo = nowEpoch - 24 * 3600;
-                        var daySamples = samples.Where(s => s.t >= dayAgo).ToList();
-
-                        if (daySamples.Count > 0)
-                        {
-                            snapshot.MinPercent = daySamples.Min(s => s.p);
-                            snapshot.MaxPercent = daySamples.Max(s => s.p);
-                        }
-
-                        // 按小时分桶 (24 桶)，并执行休眠期间前向沿用算法 (Forward Fill)，绝不直接归零
-                        var buckets = new List<HourlyBucket>();
-                        DateTime nowLocal = DateTime.Now;
-                        DateTime thisHour = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, nowLocal.Hour, 0, 0);
-
-                        int activeHours = 0;
-                        int lastKnownPct = -1;
-
-                        // 尝试从 24 小时之前的最近一次历史中获取初始延续电量
-                        double dayAgoStart = new DateTimeOffset(thisHour.AddHours(-23)).ToUnixTimeSeconds();
-                        var priorSamples = samples.Where(s => s.t < dayAgoStart).ToList();
-                        if (priorSamples.Count > 0 && priorSamples.Last().p > 0)
-                        {
-                            lastKnownPct = priorSamples.Last().p;
-                        }
-
-                        for (int i = 23; i >= 0; i--)
-                        {
-                            DateTime hStart = thisHour.AddHours(-i);
-                            DateTime hEnd = hStart.AddHours(1);
-                            double sStart = new DateTimeOffset(hStart).ToUnixTimeSeconds();
-                            double sEnd = new DateTimeOffset(hEnd).ToUnixTimeSeconds();
-
-                            var inHour = samples.Where(s => s.t >= sStart && s.t < sEnd).ToList();
-                            int count = inHour.Count;
-                            int bucketPct;
-                            bool isSleeping = false;
-
-                            if (count > 0)
-                            {
-                                activeHours++;
-                                bucketPct = inHour.Last().p;
-                                lastKnownPct = bucketPct;
-                            }
-                            else
-                            {
-                                // 休眠期间沿用休眠前的电量，绝不直接归零！
-                                isSleeping = true;
-                                bucketPct = lastKnownPct > 0 ? lastKnownPct : snapshot.Percent;
-                            }
-
-                            buckets.Add(new HourlyBucket(hStart.ToString("HH:00"), bucketPct, count, isSleeping));
-                        }
-
-                        snapshot.HourlyBuckets = buckets;
-                        snapshot.OnlineHoursCount = activeHours;
-
-                        // 续航预测 (仅在放电段且电量 > 0 时有效计算)
-                        if (snapshot.Percent > 0 && daySamples.Count >= 2 && !snapshot.IsCharging)
-                        {
-                            var discharge = daySamples.Where(s => !s.c).OrderBy(s => s.t).ToList();
-                            if (discharge.Count >= 2)
-                            {
-                                double dtHours = (discharge.Last().t - discharge.First().t) / 3600.0;
-                                int dp = discharge.First().p - discharge.Last().p;
-                                if (dtHours >= 0.5 && dp > 0)
-                                {
-                                    double rate = dp / dtHours;
-                                    snapshot.RatePerHour = rate;
-                                    double remHours = snapshot.Percent / rate;
-                                    snapshot.Confidence = dtHours > 4 ? "高" : "中";
-
-                                    if (remHours >= 24)
-                                    {
-                                        int d = (int)(remHours / 24);
-                                        int h = (int)(remHours % 24);
-                                        snapshot.RemainingTimeText = $"{d} 天 {h} 小时";
-                                    }
-                                    else
-                                    {
-                                        snapshot.RemainingTimeText = $"{(int)remHours} 小时";
-                                    }
-                                }
-                                else
-                                {
-                                    snapshot.RemainingTimeText = "放电数据积累中";
-                                    snapshot.Confidence = "积累中";
-                                }
-                            }
-                        }
-                    }
-                }
+                return;
             }
+
+            using var stream = File.OpenRead(histPath);
+            using var doc = JsonDocument.Parse(stream);
+            if (!doc.RootElement.TryGetProperty("samples", out var samplesArr))
+            {
+                return;
+            }
+
+            foreach (var elem in samplesArr.EnumerateArray())
+            {
+                if (!elem.TryGetProperty("t", out var tProp) ||
+                    !elem.TryGetProperty("percent", out var pProp))
+                {
+                    continue;
+                }
+
+                int p = pProp.GetInt32();
+                if (p <= 0 || p > 100)
+                {
+                    continue;
+                }
+
+                bool c = elem.TryGetProperty("charging", out var cProp) && cProp.GetBoolean();
+                _samples.Add((tProp.GetDouble(), p, c));
+            }
+
+            // 旧版本累积的历史可能很大：加载后立刻按保留窗口裁剪。
+            // 分桶用的是单调前进的指针，因此这里也确保时间升序。
+            if (_samples.Count > 1 && !IsAscending(_samples))
+            {
+                _samples.Sort(static (a, b) => a.T.CompareTo(b.T));
+            }
+
+            PruneOldSamples(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         }
         catch { }
-
-        if (string.IsNullOrEmpty(snapshot.RemainingTimeText) || snapshot.RemainingTimeText == "正在估算...")
-        {
-            snapshot.RemainingTimeText = snapshot.IsCharging ? "充电中" : (snapshot.Percent > 0 ? "放电数据积累中" : "设备离线");
-        }
-
-        return snapshot;
     }
 
-    private static void AppendSampleToFile(string path, double t, int percent, bool charging)
+    private static bool IsAscending(List<(double T, int P, bool C)> list)
     {
+        for (int i = 1; i < list.Count; i++)
+        {
+            if (list[i].T < list[i - 1].T)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>丢弃保留窗口之外的旧样本，防止内存与文件无限增长。</summary>
+    private void PruneOldSamples(double nowEpoch)
+    {
+        double cutoff = nowEpoch - RetainSeconds;
+        int drop = 0;
+        while (drop < _samples.Count && _samples[drop].T < cutoff)
+        {
+            drop++;
+        }
+
+        if (drop > 0)
+        {
+            _samples.RemoveRange(0, drop);
+        }
+    }
+
+    /// <summary>
+    /// 按节流间隔把内存样本整体写回文件。
+    /// 原来每记录一个样本就 ReadAllText + 字符串拼接 + WriteAllText 整个文件，
+    /// 现在改为低频整体覆盖写，磁盘 IO 从「每次轮询」降到「每 5 分钟」。
+    /// </summary>
+    private void MaybePersist(double nowEpoch)
+    {
+        if (_historyPath == null)
+        {
+            return;
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        if (nowUtc - _lastPersistUtc < PersistInterval)
+        {
+            return;
+        }
+
+        _lastPersistUtc = nowUtc;
+
         try
         {
-            string content = File.ReadAllText(path).Trim();
-            int closeIdx = content.LastIndexOf(']');
-            if (closeIdx > 0)
+            var sb = new StringBuilder(_samples.Count * 60 + 64);
+            sb.Append("{\n \"samples\": [\n");
+            for (int i = 0; i < _samples.Count; i++)
             {
-                string entry = $"   {{\"t\": {t:F3}, \"percent\": {percent}, \"charging\": {(charging ? "true" : "false")}}}\n";
-                // 检查前面是否有元素，需要补逗号
-                int lastBrace = content.LastIndexOf('}', closeIdx);
-                if (lastBrace > 0)
+                var s = _samples[i];
+                sb.Append("   {\"t\": ").Append(s.T.ToString("F3", CultureInfo.InvariantCulture))
+                  .Append(", \"percent\": ").Append(s.P)
+                  .Append(", \"charging\": ").Append(s.C ? "true" : "false")
+                  .Append('}');
+                if (i < _samples.Count - 1)
                 {
-                    string before = content[..(lastBrace + 1)];
-                    string after = content[closeIdx..];
-                    File.WriteAllText(path, before + ",\n" + entry + " " + after);
+                    sb.Append(',');
+                }
+                sb.Append('\n');
+            }
+            sb.Append(" ]\n}\n");
+
+            string? dir = Path.GetDirectoryName(_historyPath);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            // 必须显式用「无 BOM」的 UTF8：Encoding.UTF8 会写入 BOM，
+            // 使文件不再是标准 JSON（Python 等解析器会直接报错）。
+            File.WriteAllText(_historyPath, sb.ToString(), new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 24 小时聚合与续航预测。原来的实现针对每个小时都做一次
+    /// samples.Where(...).ToList()，即 24 次全量扫描；这里改为一次遍历分桶。
+    /// </summary>
+    private void BuildHistoryAnalysis(BatterySnapshot snapshot, double nowEpoch)
+    {
+        double dayAgo = nowEpoch - 24 * 3600;
+
+        // 单遍扫描：同时求出 24h 区间的最值、放电段起止
+        int minP = int.MaxValue;
+        int maxP = int.MinValue;
+        double firstDischargeT = 0, lastDischargeT = 0;
+        int firstDischargeP = 0, lastDischargeP = 0;
+        bool hasDischarge = false;
+
+        foreach (var s in _samples)
+        {
+            if (s.T >= dayAgo)
+            {
+                if (s.P < minP) minP = s.P;
+                if (s.P > maxP) maxP = s.P;
+
+                if (!s.C)
+                {
+                    if (!hasDischarge)
+                    {
+                        firstDischargeT = s.T;
+                        firstDischargeP = s.P;
+                        hasDischarge = true;
+                    }
+                    lastDischargeT = s.T;
+                    lastDischargeP = s.P;
                 }
             }
         }
-        catch { }
+
+        if (maxP >= minP)
+        {
+            snapshot.MinPercent = minP;
+            snapshot.MaxPercent = maxP;
+        }
+
+        // 按小时分桶 (24 桶)，休眠时段沿用上一个已知电量 (Forward Fill)
+        var buckets = new List<HourlyBucket>(24);
+        DateTime nowLocal = DateTime.Now;
+        DateTime thisHour = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, nowLocal.Hour, 0, 0);
+
+        // 24 小时窗口起点之前的最后一个样本，作为首个桶的延续基线
+        double windowStart = new DateTimeOffset(thisHour.AddHours(-23)).ToUnixTimeSeconds();
+        int lastKnownPct = -1;
+        foreach (var s in _samples)
+        {
+            if (s.T >= windowStart)
+            {
+                break;
+            }
+            lastKnownPct = s.P;
+        }
+
+        int activeHours = 0;
+
+        // 逐个桶扫描：指针随样本单调前进，整体仍是 O(样本数 + 24)
+        int idx = 0;
+        for (int i = 23; i >= 0; i--)
+        {
+            DateTime hStart = thisHour.AddHours(-i);
+            double sStart = new DateTimeOffset(hStart).ToUnixTimeSeconds();
+            double sEnd = new DateTimeOffset(hStart.AddHours(1)).ToUnixTimeSeconds();
+
+            int count = 0;
+            int bucketPct = lastKnownPct > 0 ? lastKnownPct : snapshot.Percent;
+
+            while (idx < _samples.Count && _samples[idx].T < sStart)
+            {
+                idx++;
+            }
+
+            int j = idx;
+            while (j < _samples.Count && _samples[j].T < sEnd)
+            {
+                count++;
+                bucketPct = _samples[j].P;
+                j++;
+            }
+
+            bool isSleeping = count == 0;
+            if (count > 0)
+            {
+                activeHours++;
+                lastKnownPct = bucketPct;
+            }
+
+            buckets.Add(new HourlyBucket(hStart.ToString("HH:00"), bucketPct, count, isSleeping));
+        }
+
+        snapshot.HourlyBuckets = buckets;
+        snapshot.OnlineHoursCount = activeHours;
+
+        // 续航预测（仅放电段且数据充足时）
+        if (snapshot.Percent > 0 && hasDischarge && !snapshot.IsCharging)
+        {
+            double dtHours = (lastDischargeT - firstDischargeT) / 3600.0;
+            int dp = firstDischargeP - lastDischargeP;
+            if (dtHours >= 0.5 && dp > 0)
+            {
+                double rate = dp / dtHours;
+                snapshot.RatePerHour = rate;
+                double remHours = snapshot.Percent / rate;
+                snapshot.Confidence = dtHours > 4 ? "高" : "中";
+
+                snapshot.RemainingTimeText = remHours >= 24
+                    ? $"{(int)(remHours / 24)} 天 {(int)(remHours % 24)} 小时"
+                    : $"{(int)remHours} 小时";
+            }
+            else
+            {
+                snapshot.RemainingTimeText = "放电数据积累中";
+                snapshot.Confidence = "积累中";
+            }
+        }
     }
 
     private void CheckAlerts(BatterySnapshot snapshot)
