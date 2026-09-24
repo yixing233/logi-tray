@@ -89,7 +89,12 @@ internal static class Program
         var readings = DeviceReader.ReadAll(settings);
         var win = new DeviceCardWindow(readings, settings, () => { });
         win.Closed += (_, _) => app.Shutdown();
-        app.Startup += (_, _) => win.Show();
+        app.Startup += (_, _) =>
+        {
+            // 没有托盘点击锚点，ShowNear 会退回靠近通知区域的位置
+            UnmanagedMethods.GetCursorPos(out var pt);
+            win.ShowNear(pt.X, pt.Y);
+        };
         app.Run();
         return 0;
     }
@@ -195,6 +200,17 @@ internal sealed class TrayContext : IDisposable
     /// <summary>各设备上次已通知的电量，用于避免同一电量反复提醒。</summary>
     private readonly Dictionary<string, int> _lastNotified = new();
 
+    /// <summary>
+    /// 托盘图标被按下那一刻的光标位置（物理像素），作为卡片锚点。
+    ///
+    /// 为什么在 MouseDown 时就记下来：右键菜单弹出时会为避开屏幕边缘而位移，
+    /// 那时再取光标得到的是**菜单项**坐标，卡片会被锚到错误位置。
+    /// 完整版同样在按下与菜单 Opening 两处记录。
+    /// </summary>
+    private int _anchorX;
+    private int _anchorY;
+    private bool _hasAnchor;
+
     public TrayContext(MultiSettings settings, Application app)
     {
         _settings = settings;
@@ -206,6 +222,7 @@ internal sealed class TrayContext : IDisposable
             Visible = true,
             ContextMenuStrip = BuildMenu(),
         };
+        _tray.MouseDown += (_, _) => CaptureAnchor();
         _tray.MouseClick += OnTrayClick;
 
         _timer = new DispatcherTimer
@@ -213,6 +230,39 @@ internal sealed class TrayContext : IDisposable
             Interval = TimeSpan.FromSeconds(Math.Max(5, _settings.Interval)),
         };
         _timer.Tick += (_, _) => Refresh();
+    }
+
+    /// <summary>记录托盘图标的锚点（此刻菜单尚未弹出，光标就在图标上）。</summary>
+    private void CaptureAnchor()
+    {
+        if (UnmanagedMethods.GetCursorPos(out var pt))
+        {
+            _anchorX = pt.X;
+            _anchorY = pt.Y;
+            _hasAnchor = true;
+        }
+    }
+
+    /// <summary>锚点 X；没有有效锚点时退回当前光标。</summary>
+    private int AnchorX
+    {
+        get
+        {
+            if (_hasAnchor) return _anchorX;
+            UnmanagedMethods.GetCursorPos(out var pt);
+            return pt.X;
+        }
+    }
+
+    /// <summary>锚点 Y；没有有效锚点时退回当前光标。</summary>
+    private int AnchorY
+    {
+        get
+        {
+            if (_hasAnchor) return _anchorY;
+            UnmanagedMethods.GetCursorPos(out var pt);
+            return pt.Y;
+        }
     }
 
     /// <summary>在 WPF 消息循环启动后开始轮询。</summary>
@@ -232,6 +282,8 @@ internal sealed class TrayContext : IDisposable
     private System.Windows.Forms.ContextMenuStrip BuildMenu()
     {
         var menu = new System.Windows.Forms.ContextMenuStrip { ShowImageMargin = false };
+        // 菜单弹出前再记一次锚点，避免按下与弹出之间有鼠标移动
+        menu.Opening += (_, _) => CaptureAnchor();
 
         menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(
             "查看设备", null, (_, _) => ShowDetails()));
@@ -354,21 +406,36 @@ internal sealed class TrayContext : IDisposable
 
     private void OnTrayClick(object? sender, System.Windows.Forms.MouseEventArgs e)
     {
-        if (e.Button == System.Windows.Forms.MouseButtons.Left) ShowDetails();
+        if (e.Button == System.Windows.Forms.MouseButtons.Left)
+        {
+            // 左键点击：像完整版那样切换显示/收起
+            if (_card != null && _card.IsVisible)
+            {
+                _card.Close();
+                _card = null;
+            }
+            else
+            {
+                ShowDetails();
+            }
+        }
     }
 
     private void ShowDetails()
     {
+        int ax = AnchorX, ay = AnchorY;
+
         if (_card == null || !_card.IsLoaded)
         {
             _card = new DeviceCardWindow(_readings, _settings, ShowSettings);
             _card.Closed += (_, _) => _card = null;
-            _card.Show();
+            // ShowNear 负责显示并按锚点定位，不要先 Show() 再用默认位置闪现
+            _card.ShowNear(ax, ay);
         }
         else
         {
             _card.UpdateData(_readings);
-            _card.Activate();
+            _card.ShowNear(ax, ay);
         }
     }
 

@@ -43,6 +43,15 @@ public sealed class DeviceCardWindow : Window
     private bool _wasPrimaryDown;
     private bool _adjusting;
 
+    /// <summary>
+    /// 托盘图标的屏幕 X（物理像素）。卡片水平居中对齐到它，
+    /// 而不是固定贴在屏幕右下角 —— 后者会让卡片离图标很远（用户反馈过）。
+    /// </summary>
+    private double _anchorX = double.NaN;
+
+    /// <summary>是否已有有效锚点。</summary>
+    private bool HasAnchor => !double.IsNaN(_anchorX);
+
     public DeviceCardWindow(List<DeviceReading> readings, MultiSettings settings,
                             Action onOpenSettings)
     {
@@ -309,6 +318,17 @@ public sealed class DeviceCardWindow : Window
         }
     }
 
+    /// <summary>
+    /// 把卡片摆到托盘图标正上方。
+    ///
+    /// 水平方向**以锚点（托盘图标的 X）居中**，而不是固定贴屏幕右边 ——
+    /// 后者会让卡片离图标很远，用户看到的卡片出现在右下角落，与图标脱节。
+    /// 锚点由 TrayContext 在托盘图标被按下时记录，是图标真实位置；
+    /// 右键菜单弹出后菜单自身会位移，那时再取光标就晚了。
+    ///
+    /// Win32 返回的锚点与溢出面板矩形是物理像素，而 WPF 的窗口位置与
+    /// 工作区是 DIP，混用会让高 DPI 下锚点被当成 DIP 而钳到屏幕边缘。
+    /// </summary>
     private void AdjustVerticalPosition()
     {
         if (_adjusting || !IsVisible) return;
@@ -319,32 +339,39 @@ public sealed class DeviceCardWindow : Window
         _adjusting = true;
         try
         {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            double scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
+            double scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
+
             var wa = SystemParameters.WorkArea;
-            double left = wa.Right - CardWidth - 12;
-            double top = wa.Bottom - SpacingAboveTaskbar - height;
+            double minLeft = wa.Left + 8;
+            double maxLeft = wa.Right - CardWidth - 8;
+
+            // 有锚点就居中到图标，否则退回右下角（例如非托盘入口打开）
+            double anchorDipX = HasAnchor ? _anchorX / scaleX : (wa.Right - 40);
+            double left = Math.Clamp(anchorDipX - CardWidth / 2.0, minLeft, maxLeft);
+            double top = Math.Max(wa.Top + 8,
+                wa.Bottom - SpacingAboveTaskbar - height);
 
             // 隐藏图标浮出面板展开时把卡片抬到面板之上，
             // 否则会正好压住整个面板（与完整版同一处理）
             if (UnmanagedMethods.TryGetOverflowPanelRect(out var panel))
             {
-                var dpi = VisualTreeHelper.GetDpi(this);
-                double sx = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
-                double sy = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
-                double pl = panel.Left / sx, pr = panel.Right / sx;
-                double pt = panel.Top / sy, pb = panel.Bottom / sy;
+                double pl = panel.Left / scaleX, pr = panel.Right / scaleX;
+                double pt = panel.Top / scaleY, pb = panel.Bottom / scaleY;
 
                 bool vOverlap = top < pb && top + height > pt;
                 bool hOverlap = left < pr && left + CardWidth > pl;
                 if (vOverlap && hOverlap)
                 {
-                    left = Math.Clamp((pl + pr) / 2 - CardWidth / 2,
-                        wa.Left + 8, wa.Right - CardWidth - 8);
-                    top = Math.Max(wa.Top + 8, pt - SpacingAboveTaskbar - height);
+                    left = Math.Clamp((pl + pr) / 2 - CardWidth / 2, minLeft, maxLeft);
+                    top = Math.Max(wa.Top + 8,
+                        pt - SpacingAboveTaskbar - height);
                 }
             }
 
-            Left = Math.Clamp(left, wa.Left + 8, wa.Right - CardWidth - 8);
-            Top = Math.Max(wa.Top + 8, top);
+            Left = left;
+            Top = top;
         }
         catch
         {
@@ -354,5 +381,29 @@ public sealed class DeviceCardWindow : Window
         {
             _adjusting = false;
         }
+    }
+
+    /// <summary>
+    /// 记录托盘图标锚点（物理像素）并（重新）打开卡片。
+    /// 由 TrayContext 在图标被点击时调用。
+    /// </summary>
+    public void ShowNear(double screenX, double screenY)
+    {
+        _anchorX = screenX;
+
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        // 先按内容测量出真实高度，再定位，避免第一帧用旧高度摆错位置
+        Measure(new Size(CardWidth, double.PositiveInfinity));
+        AdjustVerticalPosition();
+        Activate();
+
+        // 记录按下时左键是否仍处于按下状态：从托盘点击打开时它通常是按下的，
+        // 若不做这个基准，抬起那一刻会被误判为「点击了外部」而立即关闭。
+        _wasPrimaryDown =
+            (UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON) & 0x8000) != 0;
     }
 }
