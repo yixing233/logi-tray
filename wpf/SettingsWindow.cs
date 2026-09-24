@@ -279,18 +279,10 @@ public sealed class SettingsWindow : Window
     {
         var sp = new StackPanel();
 
-        // 2. 分组标题：电量阈值与提醒
-        var grp1 = new TextBlock
-        {
-            Text = "电量阈值与提醒",
-            FontSize = 11.5,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        grp1.SetResourceReference(TextBlock.ForegroundProperty, "ThemeGroupHeader");
-        sp.Children.Add(grp1);
+        // ================= 分组 1：电量阈值与提醒 =================
+        sp.Children.Add(CreateGroupHeader("电量阈值与提醒"));
 
-        // 卡片 1：低电量阈值
+        // 行 1：低电量阈值
         var cardLow = CreateCardContainer();
         var lowHeader = new Grid { Margin = new Thickness(0, 0, 0, 4) };
         var lowTitle = new TextBlock
@@ -350,9 +342,7 @@ public sealed class SettingsWindow : Window
         lowRangeGrid.Children.Add(lowMax);
         cardLow.Children.Add(lowRangeGrid);
 
-        sp.Children.Add(WrapInCardBorder(cardLow));
-
-        // 卡片 2：严重低电量阈值
+        // 行 2：严重低电量阈值
         var cardCrit = CreateCardContainer();
         var critHeader = new Grid { Margin = new Thickness(0, 0, 0, 4) };
         var critTitle = new TextBlock
@@ -412,9 +402,7 @@ public sealed class SettingsWindow : Window
         critRangeGrid.Children.Add(critMax);
         cardCrit.Children.Add(critRangeGrid);
 
-        sp.Children.Add(WrapInCardBorder(cardCrit));
-
-        // 卡片 3：低电量桌面通知
+        // 行 3：低电量桌面通知
         var notifyCardGrid = new Grid { Margin = new Thickness(12, 10, 12, 10) };
         notifyCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         notifyCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -440,29 +428,15 @@ public sealed class SettingsWindow : Window
         Grid.SetColumn(_notifyToggle, 1);
         notifyCardGrid.Children.Add(_notifyToggle);
 
-        var notifyBorder = new Border
-        {
-            CornerRadius = new CornerRadius(6),
-            BorderThickness = new Thickness(1),
-            Child = notifyCardGrid,
-            Margin = new Thickness(0, 0, 0, 14)
-        };
-        notifyBorder.SetResourceReference(Border.BackgroundProperty, "ThemeCardBackground");
-        notifyBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeCardBorder");
-        sp.Children.Add(notifyBorder);
+        // 整个分组共用一个卡片：三行之间用细分隔线区隔，
+        // 因此各行本身就是普通内容，不再各自套一层卡片边框。
+        sp.Children.Add(WrapGroupInCard(cardLow, cardCrit, notifyCardGrid));
 
         // 3. 分组：托盘图标样式 (电池、环形、纯数字)
-        var grp2 = new TextBlock
-        {
-            Text = "托盘图标样式",
-            FontSize = 11.5,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        grp2.SetResourceReference(TextBlock.ForegroundProperty, "ThemeGroupHeader");
+        var grp2 = CreateGroupHeader("托盘图标样式");
         sp.Children.Add(grp2);
 
-        var styleGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 14) };
+        var styleGrid = new UniformGrid { Columns = 3, Margin = new Thickness(10, 11, 10, 11) };
         var styleOptions = new (string key, string icon, string label)[]
         {
             ("battery", LucideIcons.Battery, "电池胶囊"),
@@ -490,20 +464,15 @@ public sealed class SettingsWindow : Window
             styleGrid.Children.Add(btn);
         }
         UpdateStyleButtonStyles();
-        sp.Children.Add(styleGrid);
 
-        // 4. 分组：外观主题 (跟随系统、浅色模式、深色模式)
-        var grp3 = new TextBlock
-        {
-            Text = "外观主题",
-            FontSize = 11.5,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        grp3.SetResourceReference(TextBlock.ForegroundProperty, "ThemeGroupHeader");
+        // 分组 2 独立成一个卡片
+        sp.Children.Add(WrapGroupInCard(styleGrid));
+
+        // ================= 分组 3：外观主题 =================
+        var grp3 = CreateGroupHeader("外观主题");
         sp.Children.Add(grp3);
 
-        var themeGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 14) };
+        var themeGrid = new UniformGrid { Columns = 3, Margin = new Thickness(10, 11, 10, 11) };
         var themeOptions = new (string key, string icon, string label)[]
         {
             ("system", LucideIcons.Monitor, "跟随系统"),
@@ -531,9 +500,13 @@ public sealed class SettingsWindow : Window
             themeGrid.Children.Add(btn);
         }
         UpdateThemeButtonStyles();
-        sp.Children.Add(themeGrid);
 
-        // 亚克力效果切换卡片
+        // 主题网格单独成卡片
+        sp.Children.Add(WrapGroupInCard(themeGrid));
+
+        // ================= 分组 4：行为 =================
+        sp.Children.Add(CreateGroupHeader("行为"));
+
         var acrylicCardGrid = new Grid { Margin = new Thickness(12, 10, 12, 10) };
         acrylicCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         acrylicCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -561,18 +534,7 @@ public sealed class SettingsWindow : Window
         Grid.SetColumn(_acrylicToggle, 1);
         acrylicCardGrid.Children.Add(_acrylicToggle);
 
-        var acrylicBorder = new Border
-        {
-            CornerRadius = new CornerRadius(6),
-            BorderThickness = new Thickness(1),
-            Child = acrylicCardGrid,
-            Margin = new Thickness(0, 0, 0, 14)
-        };
-        acrylicBorder.SetResourceReference(Border.BackgroundProperty, "ThemeCardBackground");
-        acrylicBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeCardBorder");
-        sp.Children.Add(acrylicBorder);
-
-        // 开机自启卡片
+        // 开机自启行
         var autoStartCardGrid = new Grid { Margin = new Thickness(12, 10, 12, 10) };
         autoStartCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         autoStartCardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -612,29 +574,14 @@ public sealed class SettingsWindow : Window
         Grid.SetColumn(_autoStartToggle, 1);
         autoStartCardGrid.Children.Add(_autoStartToggle);
 
-        var autoStartBorder = new Border
-        {
-            CornerRadius = new CornerRadius(6),
-            BorderThickness = new Thickness(1),
-            Child = autoStartCardGrid,
-            Margin = new Thickness(0, 0, 0, 14)
-        };
-        autoStartBorder.SetResourceReference(Border.BackgroundProperty, "ThemeCardBackground");
-        autoStartBorder.SetResourceReference(Border.BorderBrushProperty, "ThemeCardBorder");
-        sp.Children.Add(autoStartBorder);
+        // 亚克力与开机自启同属「行为」，共用一个卡片
+        sp.Children.Add(WrapGroupInCard(acrylicCardGrid, autoStartCardGrid));
 
-        // 5. 分组：后台刷新间隔
-        var grp4 = new TextBlock
-        {
-            Text = "后台刷新间隔",
-            FontSize = 11.5,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        grp4.SetResourceReference(TextBlock.ForegroundProperty, "ThemeGroupHeader");
+        // ================= 分组 5：后台刷新间隔 =================
+        var grp4 = CreateGroupHeader("后台刷新间隔");
         sp.Children.Add(grp4);
 
-        var intervalGrid = new UniformGrid { Columns = 5, Margin = new Thickness(0, 0, 0, 20) };
+        var intervalGrid = new UniformGrid { Columns = 5, Margin = new Thickness(10, 11, 10, 11) };
         var intervals = new (int sec, string label)[]
         {
             (10, "10 秒"),
@@ -664,7 +611,7 @@ public sealed class SettingsWindow : Window
             intervalGrid.Children.Add(btn);
         }
         UpdateIntervalButtonStyles();
-        sp.Children.Add(intervalGrid);
+        sp.Children.Add(WrapGroupInCard(intervalGrid));
 
         // 6. 底部操作按钮：左侧「关于」入口，右侧取消 / 保存
         var footer = new Grid();
@@ -1093,6 +1040,55 @@ public sealed class SettingsWindow : Window
     {
         Margin = new Thickness(12, 10, 12, 10)
     };
+
+    /// <summary>
+    /// 把一个分组的所有行装进同一个卡片（整组共用一块背景），
+    /// 行与行之间自动插入细分隔线，形成分组内的视觉区隔。
+    /// </summary>
+    private static Border WrapGroupInCard(params UIElement[] rows)
+    {
+        var panel = new StackPanel();
+        for (int i = 0; i < rows.Length; i++)
+        {
+            if (i > 0)
+            {
+                var divider = new Border
+                {
+                    Height = 1,
+                    Margin = new Thickness(12, 0, 12, 0)
+                };
+                divider.SetResourceReference(Border.BackgroundProperty, "ThemeCardBorder");
+                panel.Children.Add(divider);
+            }
+
+            panel.Children.Add(rows[i]);
+        }
+
+        var border = new Border
+        {
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            Child = panel,
+            Margin = new Thickness(0, 0, 0, 14)
+        };
+        border.SetResourceReference(Border.BackgroundProperty, "ThemeCardBackground");
+        border.SetResourceReference(Border.BorderBrushProperty, "ThemeCardBorder");
+        return border;
+    }
+
+    /// <summary>分组标题。</summary>
+    private static TextBlock CreateGroupHeader(string text, double bottomMargin = 8) 
+    {
+        var header = new TextBlock
+        {
+            Text = text,
+            FontSize = 11.5,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, bottomMargin)
+        };
+        header.SetResourceReference(TextBlock.ForegroundProperty, "ThemeGroupHeader");
+        return header;
+    }
 
     private static Border WrapInCardBorder(UIElement child)
     {
