@@ -428,15 +428,6 @@ public sealed class SettingsWindow : Window
         };
         notifyTitle.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
         notifyTextPanel.Children.Add(notifyTitle);
-
-        var notifyDesc = new TextBlock
-        {
-            Text = "电量低于设定阈值时在系统右下角弹出提示",
-            FontSize = 10.5,
-            Margin = new Thickness(0, 2, 0, 0)
-        };
-        notifyDesc.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextSecondary");
-        notifyTextPanel.Children.Add(notifyDesc);
         notifyCardGrid.Children.Add(notifyTextPanel);
 
         _notifyToggle = new CheckBox
@@ -556,15 +547,6 @@ public sealed class SettingsWindow : Window
         };
         acrylicTitle.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
         acrylicTextPanel.Children.Add(acrylicTitle);
-
-        var acrylicDesc = new TextBlock
-        {
-            Text = "呈现 Windows 11 DWM 实时虚化；关闭后采用极简纯色底板",
-            FontSize = 10.5,
-            Margin = new Thickness(0, 2, 0, 0)
-        };
-        acrylicDesc.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextSecondary");
-        acrylicTextPanel.Children.Add(acrylicDesc);
         acrylicCardGrid.Children.Add(acrylicTextPanel);
 
         _acrylicToggle = new CheckBox
@@ -605,14 +587,14 @@ public sealed class SettingsWindow : Window
         autoStartTitle.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
         autoStartTextPanel.Children.Add(autoStartTitle);
 
+        // 说明性小字已移除；此文本仅在写入注册表失败时显示警告
         _autoStartDesc = new TextBlock
         {
-            Text = AutoStartService.IsEnabled()
-                ? "登录 Windows 后自动在后台运行，无需手动打开"
-                : "登录 Windows 后不会自动运行，需手动启动",
+            Text = string.Empty,
             FontSize = 10.5,
             Margin = new Thickness(0, 2, 0, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Visibility = Visibility.Collapsed
         };
         _autoStartDesc.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextSecondary");
         autoStartTextPanel.Children.Add(_autoStartDesc);
@@ -1185,7 +1167,8 @@ public sealed class SettingsWindow : Window
     }
 
     /// <summary>
-    /// 勾选/取消开机自启时立即写入或移除注册表启动项，并刷新说明文字。
+    /// 勾选/取消开机自启时立即写入或移除注册表启动项。
+    /// 平时不显示任何说明文字，仅在写入失败时给出警告。
     /// </summary>
     private void UpdateAutoStartState(bool enabled)
     {
@@ -1193,10 +1176,16 @@ public sealed class SettingsWindow : Window
 
         if (_autoStartDesc != null)
         {
-            _autoStartDesc.Text = enabled
-                ? (ok ? "登录 Windows 后自动在后台运行，无需手动打开"
-                      : "⚠ 写入启动项失败，请检查注册表权限")
-                : "登录 Windows 后不会自动运行，需手动启动";
+            if (ok)
+            {
+                _autoStartDesc.Text = string.Empty;
+                _autoStartDesc.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                _autoStartDesc.Text = "⚠ 写入启动项失败，请检查注册表权限";
+                _autoStartDesc.Visibility = Visibility.Visible;
+            }
         }
     }
 
