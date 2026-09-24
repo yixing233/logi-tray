@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>false</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>multi-tray</AssemblyName>
+    <Product>multi-tray</Product>
+    <Title>multi-tray</Title>
+    <Version>1.0.0</Version>
+    <RootNamespace>MultiTray</RootNamespace>
+    <StartupObject>MultiTray.Program</StartupObject>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与罗技版共用同一套身份/自启/配色源码，避免三份实现漂移 -->
+    <Compile Include="..\shared\AppIdentity.cs" LinkBase="Shared" />
+    <Compile Include="..\shared\AppPalette.cs" LinkBase="Shared" />
+    <Compile Include="..\shared\AutoStartService.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 允许图标自检宿主访问 internal 渲染逻辑，用于无实机时核对显示 -->
+    <InternalsVisibleTo Include="iconshot" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="app.ico" />
+    <Content Include="app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      罗技读取程序。它是本项目读取罗技设备电量的唯一实现，
+      必须与主程序同目录，否则罗技那一栏会一直显示离线。
+    -->
+    <Content Include="..\native\build\mouse-tray.exe" Link="mouse-tray.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

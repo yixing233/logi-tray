@@ -28,8 +28,10 @@ def csproj_version(path):
 
 FULL_VER = csproj_version(os.path.join(REPO, "wpf", "MouseBatteryTray.csproj"))
 LITE_VER = csproj_version(os.path.join(REPO, "lite", "LogiTrayLite.csproj"))
+MULTI_VER = csproj_version(os.path.join(REPO, "multi", "MultiTray.csproj"))
 print(f"full version = {FULL_VER}")
 print(f"lite version = {LITE_VER}")
+print(f"multi version = {MULTI_VER}")
 
 INSTALLER = r"""@echo off
 chcp 65001 >nul
@@ -236,7 +238,6 @@ USAGE_FULL = r"""{title} v{version} · 使用说明
 
 USAGE_LITE = r"""{title} v{version} · 使用说明
 ==================================================
-
 【这个版本是什么】
   轻量版：纯 WinForms 实现，不加载 WPF 渲染栈，
   因此内存占用显著低于完整版。代价是界面为朴素风格，没有亚克力效果，
@@ -272,6 +273,67 @@ USAGE_LITE = r"""{title} v{version} · 使用说明
 
   Q: 托盘图标可以换成电池或环形吗？
   A: 轻量版只提供数字样式；如需切换请使用完整版。
+
+  Q: 提示缺少 .NET 8？
+  A: 安装脚本会自动检测并引导下载微软官方的
+     .NET Desktop Runtime 8.0.x（Windows x64，免费）。
+"""
+
+USAGE_MULTI = r"""{title} v{version} · 使用说明
+==================================================
+
+【这个版本是什么】
+  多品牌版：在同一个托盘图标里显示键盘、鼠标、耳机等多台设备的电量。
+  支持罗技、迈从 MCHOSE，以及 ATK / VXE / VGN。
+
+  与另外两个版本的区别：
+    完整版 / 轻量版  logi-tray、logi-tray-lite   仅支持罗技设备
+    多品牌版         multi-tray                  支持上述多家品牌，多设备同屏
+
+  本版本只做两件事：显示电量、低电量预警。
+  不含续航预测与历史曲线。
+
+【多设备时托盘显示哪一台】
+  显示**电量最低**的那台在线设备，一眼就能看到最需要充电的设备。
+  右上角的小圆点表示「还有其它设备」，鼠标移到图标上可看到全部设备。
+
+【快速开始】
+  1. 运行「一键安装.bat」（无需管理员权限）
+  2. 托盘图标即刻出现在任务栏右下角
+  3. 若图标被折叠，点击任务栏的 ^ 箭头即可看到
+
+【日常操作】
+  · 左键点击托盘图标    查看各设备电量列表
+  · 右键点击托盘图标    打开菜单（查看设备 / 立即刷新 / 设置 / 退出）
+
+【设置】
+  · 电量阈值与提醒      自定义低电量与严重低电量阈值，可开关桌面通知
+  · 后台刷新间隔        10 秒 ~ 2 分钟
+  · 启用的设备来源      可单独关闭某个品牌，避免对其反复探测
+  · 开机自动启动        仅写入当前用户注册表
+
+【命令行】
+  multi-tray.exe --list             列出检测到的设备与当前电量
+  multi-tray.exe --test-protocols   运行协议解析层自检（无需硬件）
+
+【绿色便携】
+  也可直接双击 {app}.exe 运行，不写入任何系统位置。
+  配置文件位于 %LOCALAPPDATA%\{data}
+
+【常见问题】
+  Q: 某台设备一直显示「已休眠 / 离线」？
+  A: 无线设备长时间不用会休眠。动一下鼠标、按一下键盘，
+     或重新连接耳机后点「立即刷新」即可。
+
+  Q: 为什么读不到我的 ATK 键盘 / 迈从耳机？
+  A: 这两家使用厂商私有协议，不同型号的指令可能不同。
+     本版本已内置公开实现记录的协议，并在多个报告 ID 上尝试，
+     但仍可能有个别型号不兼容。
+     请运行 multi-tray.exe --list 并把输出反馈给作者。
+
+  Q: 会不会显示一个猜测的电量？
+  A: 不会。读不到就显示 --，绝不显示推算值。
+     罗技设备若由只报档位或电压的特性读出，会明确标注「推算」。
 
   Q: 提示缺少 .NET 8？
   A: 安装脚本会自动检测并引导下载微软官方的
@@ -357,6 +419,14 @@ LITE_USAGE = {
     ),
 }
 
+MULTI_USAGE = {
+    "text": USAGE_MULTI,
+    "install": (
+        "echo     · 左键点击托盘图标：查看各设备电量\n"
+        "echo     · 右键点击托盘图标：显示详情 / 设置 / 退出\n"
+    ),
+}
+
 # ---------- full edition ----------
 print("\n=== full edition ===")
 if not build(os.path.join("wpf", "MouseBatteryTray.csproj")):
@@ -389,6 +459,22 @@ lite_zip = os.path.join(RELEASE, f"logi-tray-lite-v{LITE_VER}.zip")
 size = zip_dir(lite_out, lite_zip)
 print(f"  zip: {os.path.basename(lite_zip)}  {size/1024:.0f} KB")
 
+# ---------- multi-brand edition ----------
+print("\n=== multi-brand edition ===")
+if not build(os.path.join("multi", "MultiTray.csproj")):
+    raise SystemExit(1)
+
+multi_src = os.path.join(REPO, "multi", "bin", "Release", "net8.0-windows")
+multi_out = os.path.join(RELEASE, f"multi-tray-v{MULTI_VER}")
+shutil.rmtree(multi_out, ignore_errors=True)
+files = copy_app_body(multi_src, multi_out, "multi-tray", "multi-tray",
+                      "multi-tray", MULTI_VER, MULTI_USAGE)
+print(f"  packaged {len(files)} files -> {os.path.basename(multi_out)}")
+
+multi_zip = os.path.join(RELEASE, f"multi-tray-v{MULTI_VER}.zip")
+size = zip_dir(multi_out, multi_zip)
+print(f"  zip: {os.path.basename(multi_zip)}  {size/1024:.0f} KB")
+
 print("\n=== summary ===")
-for z in (full_zip, lite_zip):
+for z in (full_zip, lite_zip, multi_zip):
     print(f"  {os.path.basename(z)}  {os.path.getsize(z)/1024:.0f} KB")
