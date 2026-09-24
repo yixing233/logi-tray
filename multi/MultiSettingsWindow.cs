@@ -29,6 +29,20 @@ public sealed class MultiSettingsWindow : Window
     private readonly Border _cardBorder;
     private readonly StackPanel _rootPanel;
 
+    /// <summary>标题栏文字：主页面显示「设置」，关于页显示「关于」。</summary>
+    private TextBlock _titleText = null!;
+
+    /// <summary>返回按钮，仅在关于页可见。</summary>
+    private Button _backButton = null!;
+
+    /// <summary>页面宿主：主设置页与关于页在此切换。</summary>
+    private ContentControl _pageHost = null!;
+
+    /// <summary>关于页上的「检查更新」按钮与状态文字。</summary>
+    private Button? _checkUpdateButton;
+    private TextBlock? _updateStatusText;
+    private bool _updateCheckRunning;
+
     private Slider _lowSlider = null!;
     private Slider _criticalSlider = null!;
     private TextBlock _lowValue = null!;
@@ -101,21 +115,46 @@ public sealed class MultiSettingsWindow : Window
 
     private void Build()
     {
-        // ── 顶部标题栏 ──
+        // ── 顶部标题栏：返回(仅关于页) + 标题 + 关闭 ──
         var header = new Grid { Margin = new Thickness(0, 0, 0, 12) };
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1, GridUnitType.Star)
+        });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var title = new TextBlock
+        _backButton = new Button
+        {
+            Content = new TextBlock
+            {
+                Text = LucideIcons.ArrowLeft,
+                FontFamily = ThemeService.LucideFont,
+                FontSize = 13
+            },
+            Width = 30,
+            Height = 28,
+            Margin = new Thickness(0, 0, 6, 0),
+            ToolTip = "返回设置",
+            Cursor = Cursors.Hand,
+            Focusable = false,
+            Visibility = Visibility.Collapsed
+        };
+        _backButton.SetResourceReference(Button.StyleProperty, "FluentSecondaryButtonStyle");
+        _backButton.Click += (_, _) => ShowSettingsPage();
+        Grid.SetColumn(_backButton, 0);
+        header.Children.Add(_backButton);
+
+        _titleText = new TextBlock
         {
             Text = "设置",
             FontSize = 15,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center
         };
-        title.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
-        Grid.SetColumn(title, 0);
-        header.Children.Add(title);
+        _titleText.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
+        Grid.SetColumn(_titleText, 1);
+        header.Children.Add(_titleText);
 
         var closeBtn = new Button
         {
@@ -132,13 +171,117 @@ public sealed class MultiSettingsWindow : Window
         };
         closeBtn.SetResourceReference(Button.StyleProperty, "FluentSecondaryButtonStyle");
         closeBtn.Click += (_, _) => Close();
-        Grid.SetColumn(closeBtn, 1);
+        Grid.SetColumn(closeBtn, 2);
         header.Children.Add(closeBtn);
 
         _rootPanel.Children.Add(header);
 
+        // ── 页面宿主：主设置页 / 关于页 在此切换 ──
+        _pageHost = new ContentControl { Content = BuildSettingsPage() };
+        _rootPanel.Children.Add(_pageHost);
+
+        // ── 底部按钮：左侧「关于」入口，右侧取消 / 保存 ──
+        var buttons = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1, GridUnitType.Star)
+        });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var about = new Button
+        {
+            Content = "关于",
+            Height = 34,
+            MinWidth = 76,
+            Cursor = Cursors.Hand,
+            Focusable = false
+        };
+        about.SetResourceReference(Button.StyleProperty, "FluentSecondaryButtonStyle");
+        about.Click += (_, _) => ShowAboutPage();
+        Grid.SetColumn(about, 0);
+        buttons.Children.Add(about);
+
+        var cancel = new Button
+        {
+            Content = "取消",
+            Height = 34,
+            MinWidth = 92,
+            Cursor = Cursors.Hand,
+            Focusable = false
+        };
+        cancel.SetResourceReference(Button.StyleProperty, "FluentSecondaryButtonStyle");
+        cancel.Click += (_, _) => Close();
+        Grid.SetColumn(cancel, 2);
+        buttons.Children.Add(cancel);
+
+        var save = new Button
+        {
+            Content = "保存设置",
+            Height = 34,
+            MinWidth = 108,
+            Cursor = Cursors.Hand,
+            Focusable = false
+        };
+        save.SetResourceReference(Button.StyleProperty, "FluentPrimaryButtonStyle");
+        save.Click += (_, _) => Save();
+        Grid.SetColumn(save, 4);
+        buttons.Children.Add(save);
+
+        _rootPanel.Children.Add(buttons);
+    }
+
+    /// <summary>切回设置主页面。</summary>
+    private void ShowSettingsPage()
+    {
+        _titleText.Text = "设置";
+        _backButton.Visibility = Visibility.Collapsed;
+        _pageHost.Content = BuildSettingsPage();
+        RefreshLayout();
+    }
+
+    /// <summary>切到「关于」二级页面。</summary>
+    private void ShowAboutPage()
+    {
+        _titleText.Text = "关于";
+        _backButton.Visibility = Visibility.Visible;
+        _pageHost.Content = BuildAboutPage();
+        RefreshLayout();
+    }
+
+    /// <summary>
+    /// 供界面自检宿主切到关于页（不经过按钮点击）。
+    /// internal 而非 public：只有 InternalsVisibleTo 的 multishot 能看到。
+    /// </summary>
+    internal void ShowAboutPageForTest() => ShowAboutPage();
+
+    /// <summary>供界面自检宿主切回设置页。</summary>
+    internal void ShowSettingsPageForTest() => ShowSettingsPage();
+
+    /// <summary>
+    /// 页面切换后窗口会随内容高度收缩（SizeToContent=Height）。
+    /// 立刻重排一次，避免底部残留上一页的画面。
+    /// </summary>
+    private void RefreshLayout()
+    {
+        UpdateLayout();
+        InvalidateVisual();
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+        {
+            UpdateLayout();
+            InvalidateVisual();
+        });
+    }
+
+    /// <summary>主设置页：分组卡片。</summary>
+    private UIElement BuildSettingsPage()
+    {
+        var sp = new StackPanel();
+
         // ── 分组一：电量阈值与提醒 ──
-        _rootPanel.Children.Add(CreateGroupHeader("电量阈值与提醒"));
+        sp.Children.Add(CreateGroupHeader("电量阈值与提醒"));
 
         _lowValue = CreateValueBadge();
         _criticalValue = CreateValueBadge();
@@ -156,14 +299,14 @@ public sealed class MultiSettingsWindow : Window
 
         _notifyToggle = CreateToggle(_settings.NotifyEnabled);
 
-        _rootPanel.Children.Add(WrapGroupInCard(
+        sp.Children.Add(WrapGroupInCard(
             CreateSliderRow("低电量提醒阈值", _lowSlider, _lowValue, "5%", "50%"),
             CreateSliderRow("严重低电量阈值", _criticalSlider, _criticalValue, "5%", "30%"),
             CreateToggleRow("启用低电量桌面通知", _notifyToggle),
             CreateNoteRow("电量持续下降时会再次提醒，同一电量不会重复提醒；充电中不会提醒。")));
 
         // ── 分组二：后台刷新间隔 ──
-        _rootPanel.Children.Add(CreateGroupHeader("后台刷新间隔"));
+        sp.Children.Add(CreateGroupHeader("后台刷新间隔"));
 
         var intervalRow = new StackPanel
         {
@@ -195,60 +338,403 @@ public sealed class MultiSettingsWindow : Window
             _intervalButtons.Add((b, sec));
             intervalRow.Children.Add(b);
         }
-        _rootPanel.Children.Add(WrapGroupInCard(intervalRow));
+        sp.Children.Add(WrapGroupInCard(intervalRow));
 
         // ── 分组三：启用的设备来源 ──
-        _rootPanel.Children.Add(CreateGroupHeader("启用的设备来源"));
+        sp.Children.Add(CreateGroupHeader("启用的设备来源"));
 
         _srcLogitech = CreateToggle(_settings.EnabledSources.Contains("logitech"));
         _srcMchose = CreateToggle(_settings.EnabledSources.Contains("mchose"));
         _srcAtk = CreateToggle(_settings.EnabledSources.Contains("atk"));
 
-        _rootPanel.Children.Add(WrapGroupInCard(
+        sp.Children.Add(WrapGroupInCard(
             CreateToggleRow("罗技（HID++）", _srcLogitech),
             CreateToggleRow("迈从 MCHOSE", _srcMchose),
             CreateToggleRow("ATK / VXE / VGN", _srcAtk),
             CreateNoteRow("关闭某来源可避免对其反复探测。")));
 
         // ── 分组四：启动 ──
-        _rootPanel.Children.Add(CreateGroupHeader("启动"));
+        sp.Children.Add(CreateGroupHeader("启动"));
         _autostartToggle = CreateToggle(AutoStartService.IsEnabled());
-        _rootPanel.Children.Add(WrapGroupInCard(
+        sp.Children.Add(WrapGroupInCard(
             CreateToggleRow("开机自动启动", _autostartToggle)));
 
-        // ── 底部按钮 ──
-        var buttons = new Grid { Margin = new Thickness(0, 4, 0, 0) };
-        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        return sp;
+    }
 
-        var cancel = new Button
+    // ───────────── 关于页 ─────────────
+
+    private const string RepoOwner = "yixing233";
+    private const string RepoName = "logi-tray";
+    private const string RepoUrl = "https://github.com/" + RepoOwner + "/" + RepoName;
+    private const string AuthorName = "yixing233";
+    private const string LicenseName = "GPL-3.0";
+
+    /// <summary>「关于」二级页面：图标、名称版本、作者、协议、仓库、检查更新。</summary>
+    private UIElement BuildAboutPage()
+    {
+        _checkUpdateButton = null;
+        _updateStatusText = null;
+
+        var sp = new StackPanel();
+
+        // ── 图标 + 名称 + 版本 ──
+        var header = new StackPanel
         {
-            Content = "取消",
-            Height = 34,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 4, 0, 18)
+        };
+
+        var icon = new Image
+        {
+            Width = 72,
+            Height = 72,
+            // 用 Fill：StackPanel 收缩宽度时 Uniform 会把缩放算错、导致图标被裁切
+            Stretch = Stretch.Fill,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Source = LoadAppIcon()
+        };
+        header.Children.Add(icon);
+
+        var nameText = new TextBlock
+        {
+            Text = "multi-tray",
+            FontSize = 18,
+            FontWeight = FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 10, 0, 2)
+        };
+        nameText.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
+        header.Children.Add(nameText);
+
+        var versionText = new TextBlock
+        {
+            Text = $"版本 {AppVersion()}",
+            FontSize = 11.5,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        versionText.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextSecondary");
+        header.Children.Add(versionText);
+
+        var descText = new TextBlock
+        {
+            Text = "多品牌键鼠耳机电量托盘",
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 6, 0, 0)
+        };
+        descText.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextFaint");
+        header.Children.Add(descText);
+
+        sp.Children.Add(header);
+
+        // ── 信息卡：作者 / 协议 / 仓库 ──
+        var infoPanel = new StackPanel { Margin = new Thickness(12, 10, 12, 10) };
+        infoPanel.Children.Add(CreateInfoRow("作者", AuthorName, null, false));
+        infoPanel.Children.Add(CreateInfoRow("开源协议", LicenseName, null, false));
+        infoPanel.Children.Add(CreateInfoRow("仓库地址", $"{RepoOwner}/{RepoName}",
+            RepoUrl, true));
+        sp.Children.Add(WrapInCard(infoPanel));
+
+        // ── 检查更新 ──
+        var actionPanel = new StackPanel { Margin = new Thickness(12, 10, 12, 10) };
+        var actionGrid = new Grid();
+        actionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        actionGrid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1, GridUnitType.Star)
+        });
+
+        _checkUpdateButton = new Button
+        {
+            Content = "检查更新",
+            FontSize = 12.5,
+            Height = 32,
             MinWidth = 92,
             Cursor = Cursors.Hand,
+            VerticalAlignment = VerticalAlignment.Center,
             Focusable = false
         };
-        cancel.SetResourceReference(Button.StyleProperty, "FluentSecondaryButtonStyle");
-        cancel.Click += (_, _) => Close();
-        Grid.SetColumn(cancel, 0);
-        buttons.Children.Add(cancel);
+        _checkUpdateButton.SetResourceReference(Button.StyleProperty,
+            "FluentPrimaryButtonStyle");
+        _checkUpdateButton.Click += (_, _) => CheckForUpdatesAsync();
+        Grid.SetColumn(_checkUpdateButton, 0);
+        actionGrid.Children.Add(_checkUpdateButton);
 
-        var save = new Button
+        _updateStatusText = new TextBlock
         {
-            Content = "保存设置",
-            Height = 34,
-            MinWidth = 108,
-            Cursor = Cursors.Hand,
-            Focusable = false
+            Text = "点击检查是否有新版本",
+            FontSize = 11.5,
+            Margin = new Thickness(12, 0, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center
         };
-        save.SetResourceReference(Button.StyleProperty, "FluentPrimaryButtonStyle");
-        save.Click += (_, _) => Save();
-        Grid.SetColumn(save, 2);
-        buttons.Children.Add(save);
+        _updateStatusText.SetResourceReference(TextBlock.ForegroundProperty,
+            "ThemeTextSecondary");
+        Grid.SetColumn(_updateStatusText, 1);
+        actionGrid.Children.Add(_updateStatusText);
 
-        _rootPanel.Children.Add(buttons);
+        actionPanel.Children.Add(actionGrid);
+        sp.Children.Add(WrapInCard(actionPanel));
+
+        return sp;
+    }
+
+    /// <summary>一行「标签：值」，值可选渲染成可点击链接。</summary>
+    private UIElement CreateInfoRow(string label, string value, string? linkUrl,
+                                    bool isLast)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, isLast ? 0 : 8) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1, GridUnitType.Star)
+        });
+
+        var labelText = new TextBlock
+        {
+            Text = label,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        labelText.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextSecondary");
+        Grid.SetColumn(labelText, 0);
+        grid.Children.Add(labelText);
+
+        if (linkUrl == null)
+        {
+            var valueText = new TextBlock
+            {
+                Text = value,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            valueText.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
+            Grid.SetColumn(valueText, 1);
+            grid.Children.Add(valueText);
+        }
+        else
+        {
+            string url = linkUrl;
+            var link = new Button
+            {
+                Content = value,
+                FontSize = 12,
+                Height = 26,
+                Padding = new Thickness(8, 0, 10, 0),
+                Cursor = Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                ToolTip = url,
+                Focusable = false
+            };
+            link.SetResourceReference(Button.StyleProperty, "FluentSecondaryButtonStyle");
+            link.Click += (_, _) => OpenUrl(url);
+            Grid.SetColumn(link, 1);
+            grid.Children.Add(link);
+        }
+
+        return grid;
+    }
+
+    /// <summary>把内容包进一张卡片（与设置页样式一致，但无底部外边距）。</summary>
+    private static Border WrapInCard(UIElement child)
+    {
+        var border = new Border
+        {
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            Child = child
+        };
+        border.SetResourceReference(Border.BackgroundProperty, "ThemeCardBackground");
+        border.SetResourceReference(Border.BorderBrushProperty, "ThemeCardBorder");
+        return border;
+    }
+
+    /// <summary>取应用图标。先从磁盘读 app.png（与程序集名无关，最可靠）。</summary>
+    private static System.Windows.Media.ImageSource? LoadAppIcon()
+    {
+        try
+        {
+            string png = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.png");
+            if (File.Exists(png))
+            {
+                return System.Windows.Media.Imaging.BitmapFrame.Create(
+                    new Uri(png),
+                    System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+            }
+        }
+        catch { }
+
+        // 退回到程序集资源（按本程序集名拼 URI，不能用 GetEntryAssembly）
+        try
+        {
+            string asm = typeof(MultiSettingsWindow).Assembly.GetName().Name ?? "multi-tray";
+            return System.Windows.Media.Imaging.BitmapFrame.Create(
+                new Uri($"pack://application:,,,/{asm};component/app.png", UriKind.Absolute),
+                System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+        }
+        catch { }
+
+        return null;
+    }
+
+    /// <summary>取应用版本号（如 1.1.0）。</summary>
+    private static string AppVersion()
+    {
+        try
+        {
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            var info = asm.GetCustomAttributes(
+                typeof(System.Reflection.AssemblyInformationalVersionAttribute), false);
+            if (info.Length > 0 &&
+                info[0] is System.Reflection.AssemblyInformationalVersionAttribute iv &&
+                !string.IsNullOrWhiteSpace(iv.InformationalVersion))
+            {
+                string v = iv.InformationalVersion;
+                int plus = v.IndexOf('+');
+                return plus > 0 ? v.Substring(0, plus) : v;
+            }
+
+            var ver = asm.GetName().Version;
+            return ver == null ? "1.0.0" : $"{ver.Major}.{ver.Minor}.{ver.Build}";
+        }
+        catch
+        {
+            return "1.0.0";
+        }
+    }
+
+    /// <summary>用默认浏览器打开链接。</summary>
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // 打不开链接不该影响其它功能
+        }
+    }
+
+    /// <summary>
+    /// 查询 GitHub 最新 release 并与当前版本比较。只做只读 GET，不改本地文件。
+    ///
+    /// 刻意不用 REST API（api.github.com）：它对未认证 IP 限 60 次/小时，很容易 403。
+    /// 这里请求 releases/latest 网页，读取 302 的 Location 头拿最新 tag，不受配额限制。
+    /// </summary>
+    private async void CheckForUpdatesAsync()
+    {
+        if (_updateCheckRunning || _checkUpdateButton == null || _updateStatusText == null)
+        {
+            return;
+        }
+
+        _updateCheckRunning = true;
+        var button = _checkUpdateButton;
+        var status = _updateStatusText;
+
+        button.IsEnabled = false;
+        button.Content = "检查中…";
+        status.Text = "正在查询最新版本…";
+
+        try
+        {
+            string? latestTag = await FetchLatestTagAsync().ConfigureAwait(true);
+
+            if (string.IsNullOrWhiteSpace(latestTag))
+            {
+                status.Text = "未能获取版本信息，请稍后重试";
+                return;
+            }
+
+            string current = AppVersion();
+            if (CompareVersions(latestTag.TrimStart('v', 'V'), current) > 0)
+            {
+                status.Text = $"发现新版本 {latestTag}";
+                if (MessageBox.Show(this,
+                        $"发现新版本 {latestTag}（当前 {current}）。\n\n是否前往下载页面？",
+                        "multi-tray 检查更新",
+                        MessageBoxButton.YesNo, MessageBoxImage.Information)
+                    == MessageBoxResult.Yes)
+                {
+                    OpenUrl($"{RepoUrl}/releases/latest");
+                }
+            }
+            else
+            {
+                status.Text = $"已是最新版本 {current}";
+            }
+        }
+        catch
+        {
+            status.Text = "检查更新失败，请确认网络连接";
+        }
+        finally
+        {
+            button.Content = "检查更新";
+            button.IsEnabled = true;
+            _updateCheckRunning = false;
+        }
+    }
+
+    /// <summary>取最新 release 的 tag。禁止自动跟随重定向，从 302 的 Location 解析。</summary>
+    private static async Task<string?> FetchLatestTagAsync()
+    {
+        var handler = new System.Net.Http.HttpClientHandler
+        {
+            AllowAutoRedirect = false
+        };
+
+        using var http = new System.Net.Http.HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(12)
+        };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("multi-tray-update-check");
+
+        using var resp = await http.GetAsync($"{RepoUrl}/releases/latest")
+            .ConfigureAwait(false);
+
+        int code = (int)resp.StatusCode;
+        if (code is >= 300 and < 400 && resp.Headers.Location is Uri loc)
+        {
+            string path = loc.AbsolutePath.TrimEnd('/');
+            int idx = path.LastIndexOf('/');
+            if (idx >= 0 && idx + 1 < path.Length)
+            {
+                return Uri.UnescapeDataString(path.Substring(idx + 1));
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>比较点分版本号，&gt;0 表示 a 更新。</summary>
+    private static int CompareVersions(string a, string b)
+    {
+        static int[] Parts(string s) => s
+            .Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => int.TryParse(new string(p.TakeWhile(char.IsDigit).ToArray()),
+                out int n) ? n : 0)
+            .ToArray();
+
+        int[] pa = Parts(a);
+        int[] pb = Parts(b);
+        int len = Math.Max(pa.Length, pb.Length);
+        for (int i = 0; i < len; i++)
+        {
+            int va = i < pa.Length ? pa[i] : 0;
+            int vb = i < pb.Length ? pb[i] : 0;
+            if (va != vb) return va - vb;
+        }
+        return 0;
     }
 
     // ───────────── 组件构造 ─────────────

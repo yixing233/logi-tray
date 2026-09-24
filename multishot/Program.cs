@@ -251,6 +251,26 @@ internal static class Shot
             });
             bad += CheckToggleStyle(root, tag);
 
+            // 关于页：同一窗口切页后再渲染一次，确认二级页面内容齐全
+            win.ShowAboutPageForTest();
+            string aboutPath = Path.Combine(outDir, $"about_{tag}.png");
+            var (aboutBytes, aboutTexts, aboutRoot) = Render(win, aboutPath);
+            Console.WriteLine($"[about/{tag}] {aboutPath}  {aboutBytes} bytes");
+            bad += Check(aboutTexts, tag + "/about", new[]
+            {
+                "关于",
+                "multi-tray",
+                "版本 ",
+                "作者",
+                "开源协议",
+                "GPL-3.0",
+                "仓库地址",
+                "yixing233/logi-tray",
+                "检查更新",
+            });
+            bad += CheckButtonPresent(aboutRoot, tag + "/about", "检查更新");
+            bad += CheckAboutIcon(aboutRoot, tag + "/about");
+
             // 未保存就关闭：避免自检改写用户真实配置
             win.Close();
         }
@@ -473,6 +493,68 @@ internal static class Shot
 
         Console.WriteLine($"  [{tag}] 图标按钮 {2 - bad}/2 存在（共发现 {buttons.Count} 个按钮）");
         return bad;
+    }
+
+    /// <summary>
+    /// 断言关于页顶部的应用图标真的加载出来了。
+    ///
+    /// 只检查「有没有 Image 控件」不够：Image 存在但 Source 为 null 时
+    /// 界面是一片空白，不报任何错。必须确认 Source 非空且已解码出像素。
+    /// </summary>
+    private static int CheckAboutIcon(DependencyObject root, string tag)
+    {
+        var images = new List<System.Windows.Controls.Image>();
+        FindImages(root, images);
+
+        if (images.Count == 0)
+        {
+            Console.WriteLine($"  !! [{tag}] 关于页没有图标控件");
+            return 1;
+        }
+
+        var img = images[0];
+        if (img.Source == null)
+        {
+            Console.WriteLine($"  !! [{tag}] 关于页图标 Source 为空（界面会是空白）");
+            return 1;
+        }
+
+        int pw = img.Source.Width > 0 ? (int)img.Source.Width : 0;
+        if (pw <= 0)
+        {
+            Console.WriteLine($"  !! [{tag}] 关于页图标尺寸异常: {pw}");
+            return 1;
+        }
+
+        Console.WriteLine($"  [{tag}] 关于页图标已加载 {pw}px");
+        return 0;
+    }
+
+    private static void FindImages(DependencyObject node,
+                                   List<System.Windows.Controls.Image> into)
+    {
+        if (node is System.Windows.Controls.Image im) into.Add(im);
+        int n = VisualTreeHelper.GetChildrenCount(node);
+        for (int i = 0; i < n; i++)
+        {
+            FindImages(VisualTreeHelper.GetChild(node, i), into);
+        }
+    }
+
+    /// <summary>断言某个按钮文案存在（用于「关于」入口与检查更新按钮）。</summary>
+    private static int CheckButtonPresent(DependencyObject root, string tag, string label)
+    {
+        var buttons = new List<System.Windows.Controls.Button>();
+        FindButtons(root, buttons);
+
+        bool found = buttons.Exists(b => b.Content is string s && s.Contains(label));
+        if (!found)
+        {
+            Console.WriteLine($"  !! [{tag}] 缺少按钮: {label}");
+            return 1;
+        }
+        Console.WriteLine($"  [{tag}] 按钮「{label}」存在");
+        return 0;
     }
 
     private static void FindButtons(DependencyObject node,

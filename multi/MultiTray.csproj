@@ -60,6 +60,15 @@
     <Content Include="..\wpf\Fonts\lucide.ttf" Link="Fonts\lucide.ttf">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+
+    <!--
+      「关于」页顶部的大图标。同样直接引用完整版那份，不复制。
+      必须以 Content 复制到输出目录：关于页优先按磁盘路径读取，
+      这样与程序集名无关；缺了它图标位置会是一片空白。
+    -->
+    <Content Include="..\wpf\app.png" Link="app.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

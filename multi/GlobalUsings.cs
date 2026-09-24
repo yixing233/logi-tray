@@ -29,3 +29,4 @@ global using CheckBox = System.Windows.Controls.CheckBox;
 global using Point = System.Windows.Point;
 global using Size = System.Windows.Size;
 global using MessageBox = System.Windows.MessageBox;
+global using Image = System.Windows.Controls.Image;
