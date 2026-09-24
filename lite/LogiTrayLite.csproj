@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 只启用 WinForms：不引入 WPF，这是轻量版省内存的关键 -->
+    <UseWPF>false</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>logi-tray-lite</AssemblyName>
+    <Product>logi-tray-lite</Product>
+    <Title>logi-tray-lite</Title>
+    <Version>1.0.0</Version>
+    <RootNamespace>MouseBatteryTray.Lite</RootNamespace>
+    <StartupObject>MouseBatteryTray.Lite.Program</StartupObject>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- WinForms 自带的 Application.SetHighDpiMode 由 app.manifest 负责，避免重复配置告警 -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与完整版共用同一份核心源码，避免复制分叉 -->
+    <Compile Include="..\shared\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      允许测试宿主访问 internal 类型，用于在无实机鼠标时注入合成快照渲染界面，
+      从而验证详情卡片与柱状图的布局（Release 构建同样保留，便于随时自检）。
+    -->
+    <InternalsVisibleTo Include="liteshot" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="app.ico" />
+    <Content Include="app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 关于页展示的 512×512 应用图标：既作为资源内嵌，也复制一份便于外部读取 -->
+    <Resource Include="app.png" />
+    <Content Include="app.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      原生 HID++ 读取程序。它由 native/ 单独编译，不属于本项目的源码，
+      但运行时必须与主程序同目录，否则读不到电量（会一直显示离线）。
+    -->
+    <Content Include="..\native\build\mouse-tray.exe" Link="mouse-tray.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

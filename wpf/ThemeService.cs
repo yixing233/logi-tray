@@ -107,18 +107,7 @@ public static class ThemeService
         ThemeChanged?.Invoke();
     }
 
-    public static bool IsSystemDark()
-    {
-        try
-        {
-            const string key = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
-            return Registry.GetValue(key, "AppsUseLightTheme", 1) is int value && value == 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    public static bool IsSystemDark() => AppPalette.IsSystemDark();
 
     public static Brush BorderBrush => CurrentTheme == AppTheme.Dark
         ? new SolidColorBrush(Color.FromArgb(50, 255, 255, 255))
@@ -216,42 +205,9 @@ public static class ThemeService
 
     public static Color GetBatteryColor(int percent, bool charging)
     {
-        if (charging) return Color.FromRgb(0, 120, 212); // Windows 充电蓝
-        if (percent <= 0) return Color.FromRgb(140, 140, 140); // 离线中性灰
-
-        double t = Math.Clamp(percent / 100.0, 0.0, 1.0);
-
-        byte r, g, b;
-        if (t >= 0.65)
-        {
-            double f = (t - 0.65) / 0.35;
-            r = (byte)Math.Round(120 + f * (16 - 120));
-            g = (byte)Math.Round(190 + f * (148 - 190));
-            b = (byte)Math.Round(16 + f * (76 - 16));
-        }
-        else if (t >= 0.35)
-        {
-            double f = (t - 0.35) / 0.30;
-            r = (byte)Math.Round(234 + f * (120 - 234));
-            g = (byte)Math.Round(179 + f * (190 - 179));
-            b = (byte)Math.Round(8 + f * (16 - 8));
-        }
-        else if (t >= 0.15)
-        {
-            double f = (t - 0.15) / 0.20;
-            r = (byte)Math.Round(234 + f * (234 - 234));
-            g = (byte)Math.Round(88 + f * (179 - 88));
-            b = (byte)Math.Round(12 + f * (8 - 12));
-        }
-        else
-        {
-            double f = t / 0.15;
-            r = (byte)Math.Round(220 + f * (234 - 220));
-            g = (byte)Math.Round(38 + f * (88 - 38));
-            b = (byte)Math.Round(38 + f * (12 - 38));
-        }
-
-        return Color.FromRgb(r, g, b);
+        // 配色定义在共享层，保证 WPF 完整版与 WinForms 轻量版颜色一致
+        var c = AppPalette.GetBatteryColor(percent, charging);
+        return Color.FromRgb(c.R, c.G, c.B);
     }
 
     public static Brush GetBatteryBrush(int percent, bool charging)
