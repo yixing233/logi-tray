@@ -25,6 +25,18 @@ public static class LucideIcons
     public const string Moon = "\ue11e";
     public const string Zap = "\ue1b4";
     public const string Check = "\ue06c";
+
+    /// <summary>圆圈感叹号，用于「关于」入口。</summary>
+    public const string Info = "\ue077";
+
+    /// <summary>左箭头，用于二级页面的返回按钮。</summary>
+    public const string ArrowLeft = "\ue048";
+
+    /// <summary>圆环刻度（旋转/刷新），用于「检查更新」。</summary>
+    public const string Refresh = "\ue0ac";
+
+    /// <summary>右上方箭头，用于打开外部链接。</summary>
+    public const string ExternalLink = "\ue04d";
 }
 
 public static class ThemeService

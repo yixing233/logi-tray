@@ -26,6 +26,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 关于页面展示的应用图标（512×512 PNG） -->
+    <Resource Include="app.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="Fonts\lucide.ttf" />
     <Content Include="Fonts\lucide.ttf">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
