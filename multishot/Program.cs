@@ -35,6 +35,7 @@ internal static class Shot
         {
             try
             {
+                failures += ShotIcons(outDir);
                 failures += ShotSettings(outDir);
                 failures += ShotCard(outDir);
             }
@@ -53,8 +54,174 @@ internal static class Shot
         return failures == 0 ? 0 : 1;
     }
 
-    private static int ShotSettings(string outDir)
+    /// <summary>
+    /// 把要用的图标码点渲染成对照图。
+    ///
+    /// 字形名表被裁剪过，无法从字体里查名字；而我先前凭猜码点把设备图标
+    /// 指到了菜单、登出箭头、地球上。唯一可靠的确认方式就是画出来看。
+    /// 这里把每个码点连同它的编号一起渲染，便于逐一核对。
+    /// </summary>
+    private static int ShotIcons(string outDir)
     {
+        // 扫描一个候选区间，把码点连同编号一起画出来核对。
+        //
+        // 为什么不用现成的 LucideIcons.Refresh：它渲染出来是个带刻度的圆盘，
+        // 语义上更像「仪表」而不是「刷新」。字体按图标名**字母序**排列
+        // （已证实 battery E053 < check E06C < hash E0EF < monitor E11D <
+        // settings E154 < sun E178 < x E1B2 < zap E1B4），
+        // 所以循环箭头类图标就在 settings 前后的 r/s 段，扫一遍即可确认。
+        const int start = 0xE140;
+        const int end = 0xE190;
+        const int cols = 8;
+        const int cell = 62;
+        int count = end - start;
+        int rows = (count + cols - 1) / cols;
+
+        int w = cols * cell;
+        int h = rows * cell;
+
+        var canvas = new System.Windows.Controls.Canvas
+        {
+            Width = w,
+            Height = h,
+            Background = Brushes.White
+        };
+
+        for (int i = 0; i < count; i++)
+        {
+            int cp = start + i;
+            double cx = (i % cols) * cell;
+            double cy = (i / cols) * cell;
+
+            var box = new System.Windows.Shapes.Rectangle
+            {
+                Width = cell,
+                Height = cell,
+                Stroke = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
+                StrokeThickness = 1
+            };
+            System.Windows.Controls.Canvas.SetLeft(box, cx);
+            System.Windows.Controls.Canvas.SetTop(box, cy);
+            canvas.Children.Add(box);
+
+            var glyph = new System.Windows.Controls.TextBlock
+            {
+                Text = char.ConvertFromUtf32(cp),
+                FontFamily = ThemeService.LucideFont,
+                FontSize = 24,
+                Foreground = Brushes.Black,
+                Width = cell,
+                TextAlignment = TextAlignment.Center
+            };
+            System.Windows.Controls.Canvas.SetLeft(glyph, cx);
+            System.Windows.Controls.Canvas.SetTop(glyph, cy + 6);
+            canvas.Children.Add(glyph);
+
+            var label = new System.Windows.Controls.TextBlock
+            {
+                Text = $"{cp:X4}",
+                FontSize = 9,
+                Foreground = Brushes.Gray,
+                Width = cell,
+                TextAlignment = TextAlignment.Center
+            };
+            System.Windows.Controls.Canvas.SetLeft(label, cx);
+            System.Windows.Controls.Canvas.SetTop(label, cy + cell - 17);
+            canvas.Children.Add(label);
+        }
+
+        canvas.Measure(new Size(w, h));
+        canvas.Arrange(new Rect(0, 0, w, h));
+        canvas.UpdateLayout();
+
+        var bmp = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+        bmp.Render(canvas);
+
+        var enc = new PngBitmapEncoder();
+        enc.Frames.Add(BitmapFrame.Create(bmp));
+        string path = Path.Combine(outDir, "icons.png");
+        using (var fs = File.Create(path)) enc.Save(fs);
+
+        Console.WriteLine($"[icons] {path}  {w}x{h}  E{start:X3}-E{end:X3}");
+        return 0;
+    }
+
+    private static int ShotIconsUnused(string outDir)
+    {
+        var items = new (string label, string glyph)[]
+        {
+            ("Settings", LucideIcons.Settings),
+            ("Refresh", LucideIcons.Refresh),
+            ("X", LucideIcons.X),
+            ("Battery", LucideIcons.Battery),
+            ("Zap", LucideIcons.Zap),
+            ("Check", LucideIcons.Check),
+            ("Mouse?", "\ue115"),
+            ("Keyboard?", "\ue10e"),
+            ("Headphones", "\ue0f1"),
+        };
+        var panel = new System.Windows.Controls.StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            Background = Brushes.White
+        };
+
+        foreach (var (label, glyph) in items)
+        {
+            var col = new System.Windows.Controls.StackPanel
+            {
+                Margin = new Thickness(0, 0, 16, 0)
+            };
+            col.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = glyph,
+                FontFamily = ThemeService.LucideFont,
+                FontSize = 32,
+                Foreground = Brushes.Black,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            col.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = label,
+                FontSize = 11,
+                Foreground = Brushes.Gray,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            col.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = $"U+{(int)glyph[0]:X4}",
+                FontSize = 9,
+                Foreground = Brushes.Silver,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            panel.Children.Add(col);
+        }
+
+        var border = new System.Windows.Controls.Border
+        {
+            Background = Brushes.White,
+            Padding = new Thickness(12),
+            Child = panel
+        };
+        border.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        int w = (int)Math.Ceiling(border.DesiredSize.Width);
+        int h = (int)Math.Ceiling(border.DesiredSize.Height);
+        border.Arrange(new Rect(0, 0, w, h));
+        border.UpdateLayout();
+
+        var bmp = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+        bmp.Render(border);
+
+        var enc = new PngBitmapEncoder();
+        enc.Frames.Add(BitmapFrame.Create(bmp));
+        string path = Path.Combine(outDir, "icons.png");
+        using (var fs = File.Create(path)) enc.Save(fs);
+
+        Console.WriteLine($"[icons] {path}  {w}x{h}");
+        return 0;
+    }
+
+    private static int ShotSettings(string outDir)    {
         var settings = MultiSettings.Load();
 
         // 浅色与深色各渲染一张：深色下最容易暴露「黑字黑底」
@@ -104,14 +271,18 @@ internal static class Shot
             var (bytes, texts, root) = Render(win, path);
 
             Console.WriteLine($"[card/{tag}] {path}  {bytes} bytes");
-            bad += Check(texts, tag, new[] { "立即刷新", "关闭" });
+            bad += Check(texts, tag, new[] { "设备电量" });
             bad += CheckCardContent(texts, readings, tag);
             bad += CheckAbsent(texts, tag, new[]
             {
                 "来源",
                 "唤醒设备后点",
                 "低电量提醒",
+                // 底部按钮已按要求移除：刷新改为标题栏图标，关闭改为点击外侧
+                "立即刷新",
+                "关闭",
             });
+            bad += CheckCardIcons(root, tag);
             win.Close();
         }
         return bad;
@@ -267,6 +438,51 @@ internal static class Shot
         for (int i = 0; i < n; i++)
         {
             FindCheckBoxes(VisualTreeHelper.GetChild(node, i), into);
+        }
+    }
+
+    /// <summary>
+    /// 卡片标题栏应有两个图标按钮（刷新、设置）。
+    ///
+    /// 图标是字体字形，不是字符串，常规的文案断言看不到它们；
+    /// 这里按控件类型找 Button，并核对它的字形码点，
+    /// 避免出现「按钮在但图标缺失/写错码点」这种看不出来的问题。
+    /// </summary>
+    private static int CheckCardIcons(DependencyObject root, string tag)
+    {
+        var buttons = new List<System.Windows.Controls.Button>();
+        FindButtons(root, buttons);
+
+        var glyphs = new List<string>();
+        foreach (var b in buttons)
+        {
+            if (b.Content is string s) glyphs.Add(s);
+        }
+
+        int bad = 0;
+        if (!glyphs.Contains("\ue145"))
+        {
+            Console.WriteLine($"  !! [{tag}] 缺少刷新图标按钮");
+            bad++;
+        }
+        if (!glyphs.Contains(MouseBatteryTray.LucideIcons.Settings))
+        {
+            Console.WriteLine($"  !! [{tag}] 缺少设置图标按钮");
+            bad++;
+        }
+
+        Console.WriteLine($"  [{tag}] 图标按钮 {2 - bad}/2 存在（共发现 {buttons.Count} 个按钮）");
+        return bad;
+    }
+
+    private static void FindButtons(DependencyObject node,
+                                    List<System.Windows.Controls.Button> into)
+    {
+        if (node is System.Windows.Controls.Button b) into.Add(b);
+        int n = VisualTreeHelper.GetChildrenCount(node);
+        for (int i = 0; i < n; i++)
+        {
+            FindButtons(VisualTreeHelper.GetChild(node, i), into);
         }
     }
 

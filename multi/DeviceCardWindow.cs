@@ -150,10 +150,13 @@ public sealed class DeviceCardWindow : Window
         _rootPanel.Children.Clear();
         _renderedKeys.Clear();
 
+        // ── 顶部标题行：标题 + 刷新图标 + 设置图标 ──
+        _rootPanel.Children.Add(CreateTopBar());
+
         if (_readings.Count == 0)
         {
             _rootPanel.Children.Add(DeviceCardWidgets.CreateGroupHeader(
-                "设备", "未检测到", false));
+                "设备", "未检测到", true));
             _rootPanel.Children.Add(DeviceCardWidgets.CreateHint(
                 "支持罗技、迈从 MCHOSE、ATK / VXE / VGN。", 4, 6));
         }
@@ -173,35 +176,81 @@ public sealed class DeviceCardWindow : Window
             }
         }
 
-        _rootPanel.Children.Add(DeviceCardWidgets.CreateSeparator());
+        // 底部不再放「立即刷新 / 关闭」按钮：
+        //   刷新已改为标题栏图标按钮；
+        //   关闭由「点击卡片外侧」完成（用户要求）。
+    }
 
-        // 底部不再显示「低电量提醒：≤20% …」这行说明（用户要求移除）；
-        // 阈值可在设置页查看。
+    /// <summary>
+    /// 刷新图标的字形。
+    ///
+    /// 刻意不用完整版的 LucideIcons.Refresh（U+E0AC）：那个字形渲染出来是
+    /// 一个带刻度的圆盘，语义更像「仪表」，不像「刷新」。
+    /// U+E145 是标准的顺时针循环箭头 —— 码点由逐格渲染对照确认
+    /// （字形名表被裁剪，无法从字体里查名字，只能画出来看）。
+    /// </summary>
+    private const string RefreshGlyph = "\ue145";
 
-        // 底部操作行：立即刷新 / 关闭
-        var buttons = new Grid();
-        buttons.ColumnDefinitions.Add(new ColumnDefinition
+    /// <summary>标题栏：左侧标题，右侧刷新与设置两个图标按钮。</summary>
+    private Grid CreateTopBar()
+    {
+        var bar = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+        bar.ColumnDefinitions.Add(new ColumnDefinition
         {
             Width = new GridLength(1, GridUnitType.Star)
         });
-        buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-        buttons.ColumnDefinitions.Add(new ColumnDefinition
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var title = new TextBlock
         {
-            Width = new GridLength(1, GridUnitType.Star)
-        });
+            Text = "设备电量",
+            FontSize = 10.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = ThemeService.TechBlueBrush,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(title, 0);
+        bar.Children.Add(title);
 
-        var refresh = DeviceCardWidgets.CreateActionButton("立即刷新", primary: false);
-        refresh.Click += (_, _) =>
-            UpdateData(DeviceReader.ReadAll(_settings));
-        Grid.SetColumn(refresh, 0);
-        buttons.Children.Add(refresh);
+        var refresh = CreateIconButton(RefreshGlyph, "立即刷新");
+        refresh.Click += (_, _) => UpdateData(DeviceReader.ReadAll(_settings));
+        Grid.SetColumn(refresh, 1);
+        bar.Children.Add(refresh);
 
-        var close = DeviceCardWidgets.CreateActionButton("关闭", primary: true);
-        close.Click += (_, _) => Close();
-        Grid.SetColumn(close, 2);
-        buttons.Children.Add(close);
+        var settings = CreateIconButton(LucideIcons.Settings, "打开设置");
+        settings.Click += (_, _) =>
+        {
+            // 与完整版一致：先收起卡片再打开设置，避免两个窗口重叠
+            Hide();
+            _outsideClickTimer.Stop();
+            _onOpenSettings();
+        };
+        Grid.SetColumn(settings, 2);
+        bar.Children.Add(settings);
 
-        _rootPanel.Children.Add(buttons);
+        return bar;
+    }
+
+    /// <summary>标题栏用的图标按钮（透明底，悬停时科技蓝微光）。</summary>
+    private static Button CreateIconButton(string glyph, string tooltip)
+    {
+        var btn = new Button
+        {
+            Content = glyph,
+            FontFamily = ThemeService.LucideFont,
+            FontSize = 13,
+            Width = 24,
+            Height = 22,
+            Padding = new Thickness(0),
+            ToolTip = tooltip,
+            Cursor = Cursors.Hand,
+            Focusable = false,
+            Style = DeviceCardWidgets.CreateIconButtonStyle()
+        };
+        // 图标按钮之间留一点间距，避免贴在一起
+        btn.Margin = new Thickness(2, 0, 0, 0);
+        return btn;
     }
 
     /// <summary>一台设备一个分组：标题 + 状态 + 电池图标 + 大号电量 + 进度条。</summary>
@@ -306,14 +355,22 @@ public sealed class DeviceCardWindow : Window
     /// 卡片是 ShowActivated=false（不抢焦点），窗口未激活时 WPF 的鼠标状态
     /// 一直是 Released，于是「点了外面」永远检测不到、卡片永远关不掉。
     /// 完整版同样用 GetAsyncKeyState。
+    ///
+    /// 判定同时用两种信号，缺一不可：
+    ///   1. 0x8000 当前是否按下 —— 检测「按下沿」；
+    ///   2. 0x0001 自上次调用以来是否按过 —— 补漏。
+    /// 只看按下沿会漏掉「按下与抬起都落在两次轮询之间」的快速点击，
+    /// 用户表现为「点了外面没反应」。
     /// </summary>
     private void OutsideClickTick(object? sender, EventArgs e)
     {
         if (!IsVisible) return;
 
-        bool isDown =
-            (UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON) & 0x8000) != 0;
-        bool justPressed = isDown && !_wasPrimaryDown;
+        short state = UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON);
+        bool isDown = (state & 0x8000) != 0;
+        bool pressedSinceLast = (state & 0x0001) != 0;
+
+        bool justPressed = (isDown && !_wasPrimaryDown) || pressedSinceLast;
         _wasPrimaryDown = isDown;
 
         if (!justPressed) return;
