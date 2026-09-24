@@ -31,6 +31,8 @@ internal sealed class DetailsForm : Form
     private readonly Label _rangeLabel;
     private readonly ChartPanel _chart;
     private readonly Button _settingsButton;
+    private readonly Panel _divider;
+    private readonly Label _chartTitle;
 
     private BatterySnapshot? _lastSnapshot;
 
@@ -106,7 +108,8 @@ internal sealed class DetailsForm : Form
         };
 
         // ---- 分隔线 ----
-        var divider = new Panel
+        // Panel 默认底色与卡片白底相同，不显式设置颜色就等于没有这条线。
+        _divider = new Panel
         {
             Height = 1,
             Location = new Point(14, 92),
@@ -114,7 +117,7 @@ internal sealed class DetailsForm : Form
         };
 
         // ---- 24 小时概览 ----
-        var chartTitle = new Label
+        _chartTitle = new Label
         {
             AutoSize = true,
             Font = _labelFont,
@@ -135,19 +138,22 @@ internal sealed class DetailsForm : Form
         _chart = new ChartPanel
         {
             Location = new Point(14, 120),
-            Size = new Size(CardWidth - 28, 62)
+            // 初始按空状态给，实际高度由 UpdateData 依据是否有历史数据统一设定。
+            // 若这里就写成完整高度，UpdateData 里的"高度没变就跳过"判断会误判，
+            // 导致卡片停在空状态高度而图表被裁掉。
+            Size = new Size(CardWidth - 28, EmptyChartHeight)
         };
 
         Controls.AddRange(new Control[]
         {
             _deviceLabel, _settingsButton, _percentLabel, _statusLabel,
-            _remainingLabel, divider, chartTitle, _rangeLabel, _chart
+            _remainingLabel, _divider, _chartTitle, _rangeLabel, _chart
         });
 
         ApplyThemeToControls(dark);
 
-        // 内容高度固定，宽度固定：定位时直接可用
-        ClientSize = new Size(CardWidth, 194);
+        // 初始高度按空状态；有数据时 UpdateData 会把它展开。
+        ApplyContentHeight(hasHistory: false);
 
         // 点击卡片外部自动收起（与完整版一致的行为）
         Deactivate += (_, _) => Hide();
@@ -158,6 +164,33 @@ internal sealed class DetailsForm : Form
                 Hide();
             }
         };
+    }
+
+    /// <summary>柱状图区域高度（有历史数据时的完整高度）。</summary>
+    private const int ChartHeight = 62;
+
+    /// <summary>空状态下的图表区高度：只画一行"暂无历史记录"。</summary>
+    private const int EmptyChartHeight = 22;
+
+    /// <summary>图表区顶部位置。</summary>
+    private const int ChartTop = 120;
+
+    /// <summary>卡片底部内边距。</summary>
+    private const int CardBottomPadding = 14;
+
+    /// <summary>
+    /// 应用与「是否有历史数据」对应的高度。每次都显式设定，不做"没变就跳过"
+    /// 的优化 —— 那种判断在初始值恰好等于目标值时会跳过必要的调整。
+    /// </summary>
+    private void ApplyContentHeight(bool hasHistory)
+    {
+        _chart.Height = hasHistory ? ChartHeight : EmptyChartHeight;
+
+        int height = ChartTop + _chart.Height + CardBottomPadding;
+
+        // 无边框窗口下 Height 与 ClientSize 一致，用 ClientSize 更明确
+        ClientSize = new Size(CardWidth, height);
+        Height = height;
     }
 
     private bool _dark;
@@ -179,6 +212,12 @@ internal sealed class DetailsForm : Form
         _statusLabel.ForeColor = TextSecondary;
         _remainingLabel.ForeColor = TextFaint;
         _rangeLabel.ForeColor = TextFaint;
+        _chartTitle.ForeColor = TextSecondary;
+
+        // 分隔线必须显式上色：Panel 默认底色与卡片背景一致，不设就等于看不见
+        _divider.BackColor = dark
+            ? Color.FromArgb(58, 58, 58)
+            : Color.FromArgb(226, 230, 236);
 
         foreach (Control c in Controls)
         {
@@ -235,6 +274,11 @@ internal sealed class DetailsForm : Form
         {
             _rangeLabel.Text = "";
         }
+
+        // 有历史数据时给足图表高度；空状态只留一行文字的高度，并把卡片一起收紧。
+        // 每次都显式应用，不做"高度没变就跳过"的判断 —— 初始值恰好等于目标值时
+        // 那种判断会漏掉必要的调整，导致图表被卡片裁掉。
+        ApplyContentHeight(snapshot.HourlyBuckets is { Count: > 0 });
 
         _chart.SetBuckets(snapshot.HourlyBuckets);
         _chart.Invalidate();
@@ -339,19 +383,25 @@ internal sealed class DetailsForm : Form
             var g = e.Graphics;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-            const int chartHeight = 42;
             const float barWidth = 7f;
             const float gap = 2f;
-            int baseline = Height - 18;
 
             if (_buckets.Count == 0)
             {
+                // 空状态：面板本身已被收紧到 EmptyChartHeight，
+                // 文字垂直居中以免贴着上边缘。
                 using var emptyBrush = new SolidBrush(
                     Dark ? Color.FromArgb(110, 126, 148) : Color.FromArgb(100, 116, 139));
                 using var f = new Font("Microsoft YaHei UI", 8f);
-                g.DrawString("暂无历史记录", f, emptyBrush, new PointF(0, 8));
+                int textY = Math.Max(0, (Height - f.Height) / 2);
+                g.DrawString("暂无历史记录", f, emptyBrush, new PointF(0, textY));
                 return;
             }
+
+            // 有数据时才需要底部时间刻度（约 16px），据此推柱子的可用高度。
+            const int scaleBand = 18;
+            int chartHeight = Math.Max(10, Height - scaleBand);
+            int baseline = Height - scaleBand;
 
             // 基线：低电量区间（20..45）时抬升基线以放大差异，与完整版规则一致
             int minP = int.MaxValue, maxP = int.MinValue;

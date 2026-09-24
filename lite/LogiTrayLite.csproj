@@ -1,11 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- 鍙惎鐢?WinForms锛氫笉寮曞叆 WPF锛岃繖鏄交閲忕増鐪佸唴瀛樼殑鍏抽敭 -->
+    <!-- 只启用 WinForms：不引入 WPF，这是轻量版省内存的关键 -->
     <UseWPF>false</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -16,12 +16,12 @@
     <RootNamespace>MouseBatteryTray.Lite</RootNamespace>
     <StartupObject>MouseBatteryTray.Lite.Program</StartupObject>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <!-- WinForms 鑷甫鐨?Application.SetHighDpiMode 鐢?app.manifest 璐熻矗锛岄伩鍏嶉噸澶嶉厤缃憡璀?-->
+    <!-- WinForms 自带的 Application.SetHighDpiMode 由 app.manifest 负责，避免重复配置告警 -->
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 涓庡畬鏁寸増鍏辩敤鍚屼竴浠芥牳蹇冩簮鐮侊紝閬垮厤澶嶅埗鍒嗗弶 -->
+    <!-- 与完整版共用同一份核心源码，避免复制分叉 -->
     <Compile Include="..\shared\*.cs" LinkBase="Shared" />
   </ItemGroup>
 
@@ -33,7 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 鍏充簬椤靛睍绀虹殑 512脳512 搴旂敤鍥炬爣锛氭棦浣滀负璧勬簮鍐呭祵锛屼篃澶嶅埗涓€浠戒究浜庡閮ㄨ鍙?-->
+    <!-- 关于页展示的 512×512 应用图标：既作为资源内嵌，也复制一份便于外部读取 -->
     <Resource Include="app.png" />
     <Content Include="app.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -42,8 +42,8 @@
 
   <ItemGroup>
     <!--
-      鍘熺敓 HID++ 璇诲彇绋嬪簭銆傚畠鐢?native/ 鍗曠嫭缂栬瘧锛屼笉灞炰簬鏈」鐩殑婧愮爜锛?
-      浣嗚繍琛屾椂蹇呴』涓庝富绋嬪簭鍚岀洰褰曪紝鍚﹀垯璇讳笉鍒扮數閲忥紙浼氫竴鐩存樉绀虹绾匡級銆?
+      原生 HID++ 读取程序。它由 native/ 单独编译，不属于本项目的源码，
+      但运行时必须与主程序同目录，否则读不到电量（会一直显示离线）。
     -->
     <Content Include="..\native\build\mouse-tray.exe" Link="mouse-tray.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

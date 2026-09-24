@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -19,7 +19,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 涓や釜鐗堟湰鍏辩敤鐨勬簮鐮侊紙鍗曚竴鏉ユ簮锛岄伩鍏嶅鍒跺垎鍙夛級 -->
+    <!-- 两个版本共用的源码（单一来源，避免复制分叉） -->
     <Compile Include="..\shared\*.cs" LinkBase="Shared" />
   </ItemGroup>
 
@@ -31,7 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 鍏充簬椤甸潰灞曠ず鐨勫簲鐢ㄥ浘鏍囷紙512脳512 PNG锛?-->
+    <!-- 关于页面展示的应用图标（512×512 PNG） -->
     <Resource Include="app.png" />
   </ItemGroup>
 
@@ -44,12 +44,12 @@
 
   <ItemGroup>
     <!--
-      鍘熺敓 HID++ 璇诲彇绋嬪簭銆傚畠鐢?native/ 鍗曠嫭缂栬瘧锛屼笉灞炰簬鏈」鐩簮鐮侊紝
-      浣嗚繍琛屾椂蹇呴』涓庝富绋嬪簭鍚岀洰褰曪紝鍚﹀垯璇讳笉鍒扮數閲忥紙涓€鐩存樉绀虹绾匡級銆?
+      原生 HID++ 读取程序。它由 native/ 单独编译，不属于本项目源码，
+      但运行时必须与主程序同目录，否则读不到电量（一直显示离线）。
 
-      姝ゅ墠杩欓噷娌℃湁寮曠敤瀹冿紝杈撳嚭鐩綍閲岀殑 mouse-tray.exe 鍙槸鎵嬪伐鎷疯礉鐣欎笅鐨?
-      闄堟棫鍓湰 鈥斺€?缁撴灉鏄噸鏂扮紪璇?native 鍚庯紝瀹屾暣鐗堜粛鐒舵墦鍖呮棫璇诲彇鍣紝
-      鍗忚灞傜殑淇涓嶄細鐢熸晥銆傛樉寮忓紩鐢ㄥ悗鐢辨瀯寤虹粺涓€澶嶅埗锛屼笌杞婚噺鐗堜竴鑷淬€?
+      此前这里没有引用它，输出目录里的 mouse-tray.exe 只是手工拷贝留下的
+      陈旧副本 —— 结果是重新编译 native 后，完整版仍然打包旧读取器，
+      协议层的修复不会生效。显式引用后由构建统一复制，与轻量版一致。
     -->
     <Content Include="..\native\build\mouse-tray.exe" Link="mouse-tray.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
