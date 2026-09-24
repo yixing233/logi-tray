@@ -14,6 +14,7 @@ using GdiPen = System.Drawing.Pen;
 using GdiBrushes = System.Drawing.Brushes;
 using GdiStringFormat = System.Drawing.StringFormat;
 using GdiRectangleF = System.Drawing.RectangleF;
+using GdiPixelFormat = System.Drawing.Imaging.PixelFormat;
 
 namespace MouseBatteryTray;
 
@@ -234,33 +235,24 @@ public sealed class TrayIconManager : IDisposable
         _notifyIcon.ShowBalloonTip(3000, title, text, ToolTipIcon.Warning);
     }
 
+    /// <summary>
+    /// 超采样倍率。GDI+ 直接在 16×16 上抗锯齿时采样点太少，环形进度弧的锯齿
+    /// 尤其明显。改为在 4 倍画布上矢量绘制，再用高质量插值缩回 16×16，
+    /// 相当于 16 倍采样，边缘平滑度显著提升。
+    /// </summary>
+    private const int SuperSample = 4;
+
+    /// <summary>托盘图标的目标边长（像素）。</summary>
+    private const int IconSize = 16;
+
     private void UpdateIcon(int percent, bool charging)
     {
         try
         {
-            const int size = 16;
-            using var bmp = new GdiBitmap(size, size);
-            using (var g = GdiGraphics.FromImage(bmp))
-            {
-                g.Clear(GdiColor.Transparent);
+            var mediaColor = ThemeService.GetBatteryColor(percent, charging);
+            GdiColor accentColor = GdiColor.FromArgb(mediaColor.R, mediaColor.G, mediaColor.B);
 
-                var mediaColor = ThemeService.GetBatteryColor(percent, charging);
-                GdiColor accentColor = GdiColor.FromArgb(mediaColor.R, mediaColor.G, mediaColor.B);
-
-                switch (_currentStyle)
-                {
-                    case "ring":
-                        DrawRingIcon(g, bmp, percent, charging, accentColor);
-                        break;
-                    case "number":
-                        DrawNumberIcon(g, percent, charging, accentColor);
-                        break;
-                    default: // "battery"
-                        DrawBatteryIcon(g, bmp, percent, charging, accentColor);
-                        break;
-                }
-            }
-
+            using var bmp = RenderIcon(percent, charging, accentColor);
             IntPtr hIcon = bmp.GetHicon();
             GdiIcon? oldIcon = _notifyIcon.Icon;
             _notifyIcon.Icon = GdiIcon.FromHandle(hIcon);
@@ -272,6 +264,56 @@ public sealed class TrayIconManager : IDisposable
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 渲染 16×16 托盘图标：先在高分辨率画布上绘制，再降采样。
+    /// 矢量图形按 16×16 逻辑坐标书写，由 ScaleTransform 统一放大；
+    /// 像素字模则用 FillLogicalPixel 按倍率铺成方块，降采样后依然锐利。
+    /// </summary>
+    private GdiBitmap RenderIcon(int percent, bool charging, GdiColor accentColor)
+    {
+        int hi = IconSize * SuperSample;
+
+        using var canvas = new GdiBitmap(hi, hi, GdiPixelFormat.Format32bppArgb);
+        using (var g = GdiGraphics.FromImage(canvas))
+        {
+            g.Clear(GdiColor.Transparent);
+            g.ScaleTransform(SuperSample, SuperSample);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.CompositingQuality = CompositingQuality.HighQuality;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+
+            switch (_currentStyle)
+            {
+                case "ring":
+                    DrawRingIcon(g, canvas, percent, charging, accentColor);
+                    break;
+                case "number":
+                    DrawNumberIcon(g, percent, charging, accentColor);
+                    break;
+                default: // "battery"
+                    DrawBatteryIcon(g, canvas, percent, charging, accentColor);
+                    break;
+            }
+        }
+
+        var result = new GdiBitmap(IconSize, IconSize, GdiPixelFormat.Format32bppArgb);
+        using (var g = GdiGraphics.FromImage(result))
+        {
+            g.Clear(GdiColor.Transparent);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.SmoothingMode = SmoothingMode.HighQuality;
+            g.CompositingQuality = CompositingQuality.HighQuality;
+            g.DrawImage(canvas,
+                        new Rectangle(0, 0, IconSize, IconSize),
+                        new Rectangle(0, 0, hi, hi),
+                        GraphicsUnit.Pixel);
+        }
+
+        return result;
     }
 
     // ========================================================================
@@ -424,6 +466,27 @@ public sealed class TrayIconManager : IDisposable
         "..."
     };
 
+    /// <summary>
+    /// 在「逻辑坐标」（16×16 网格）上填充一个像素。
+    /// 实际画布是 IconSize*SuperSample 见方，所以这里按倍率铺成方块，
+    /// 否则单像素只会落在高分辨率画布的一角，降采样后几乎消失。
+    /// </summary>
+    private static void FillLogicalPixel(GdiBitmap bmp, int logicalX, int logicalY, GdiColor color)
+    {
+        for (int dy = 0; dy < SuperSample; dy++)
+        {
+            for (int dx = 0; dx < SuperSample; dx++)
+            {
+                int x = (logicalX * SuperSample) + dx;
+                int y = (logicalY * SuperSample) + dy;
+                if (x >= 0 && x < bmp.Width && y >= 0 && y < bmp.Height)
+                {
+                    bmp.SetPixel(x, y, color);
+                }
+            }
+        }
+    }
+
     private static void DrawBolt(GdiBitmap bmp, int sx, int sy, GdiColor color)
     {
         for (int r = 0; r < 7; r++)
@@ -434,9 +497,9 @@ public sealed class TrayIconManager : IDisposable
                 {
                     int px = sx + c;
                     int py = sy + r;
-                    if (px >= 0 && px < 16 && py >= 0 && py < 16)
+                    if (px >= 0 && px < IconSize && py >= 0 && py < IconSize)
                     {
-                        bmp.SetPixel(px, py, color);
+                        FillLogicalPixel(bmp, px, py, color);
                     }
                 }
             }
@@ -502,9 +565,9 @@ public sealed class TrayIconManager : IDisposable
                 {
                     int px = startX + c;
                     int py = startY + r;
-                    if (px >= 0 && px < 16 && py >= 0 && py < 16)
+                    if (px >= 0 && px < IconSize && py >= 0 && py < IconSize)
                     {
-                        bmp.SetPixel(px, py, color);
+                        FillLogicalPixel(bmp, px, py, color);
                     }
                 }
             }
@@ -555,9 +618,9 @@ public sealed class TrayIconManager : IDisposable
                         {
                             int px = curX + c;
                             int py = startY + r;
-                            if (px >= 0 && px < 16 && py >= 0 && py < 16)
+                            if (px >= 0 && px < IconSize && py >= 0 && py < IconSize)
                             {
-                                bmp.SetPixel(px, py, color);
+                                FillLogicalPixel(bmp, px, py, color);
                             }
                         }
                     }
