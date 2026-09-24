@@ -13,7 +13,7 @@ namespace MultiTray;
 /// <summary>
 /// 多设备电量卡片：Windows 11 Fluent 亚克力悬浮窗。
 ///
-/// 外观**完全复用完整版那套组件**（shared-wpf/AcrylicWidgets.cs +
+/// 外观**完全复用完整版那套组件**（shared-wpf/DeviceCardWidgets.cs +
 /// ThemeService.cs + FluentStyles.xaml），包括：
 ///   * 分组标题用科技蓝，右侧跟随设备名
 ///   * 电池图标（外壳 + 按 10% 量化的填充 + 充电闪电）
@@ -26,7 +26,9 @@ namespace MultiTray;
 /// </summary>
 public sealed class DeviceCardWindow : Window
 {
-    private const double CardWidth = 268;
+    // 宽度对齐完整版的 232：多设备版与它并排显示时观感一致，
+    // 太宽会显得笨重（先前用了 268，比完整版宽出一圈）。
+    private const double CardWidth = 232;
     private const double CardCornerRadius = 8;
     private const int SpacingAboveTaskbar = 8;
 
@@ -120,7 +122,9 @@ public sealed class DeviceCardWindow : Window
             Interval = TimeSpan.FromMilliseconds(50)
         };
         _outsideClickTimer.Tick += OutsideClickTick;
-        _outsideClickTimer.Start();
+        // 不在这里 Start：定时器只在卡片可见时才需要跑，
+        // 常驻空转会让隐藏状态下也每 50ms 醒一次（无谓的 CPU 唤醒）。
+        // 由 ToggleNear 在显示时启动、隐藏时停止。
 
         ThemeService.ThemeChanged += OnThemeChanged;
 
@@ -148,9 +152,9 @@ public sealed class DeviceCardWindow : Window
 
         if (_readings.Count == 0)
         {
-            _rootPanel.Children.Add(AcrylicWidgets.CreateGroupHeader(
+            _rootPanel.Children.Add(DeviceCardWidgets.CreateGroupHeader(
                 "设备", "未检测到", false));
-            _rootPanel.Children.Add(AcrylicWidgets.CreateHint(
+            _rootPanel.Children.Add(DeviceCardWidgets.CreateHint(
                 "支持罗技、迈从 MCHOSE、ATK / VXE / VGN。", 4, 6));
         }
         else
@@ -169,12 +173,12 @@ public sealed class DeviceCardWindow : Window
             }
         }
 
-        _rootPanel.Children.Add(AcrylicWidgets.CreateSeparator());
+        _rootPanel.Children.Add(DeviceCardWidgets.CreateSeparator());
 
         string hint = _settings.NotifyEnabled
             ? $"低电量提醒：≤{_settings.LowThreshold}% 提醒，≤{_settings.CriticalThreshold}% 严重提醒"
             : "低电量提醒已关闭";
-        _rootPanel.Children.Add(AcrylicWidgets.CreateHint(hint, 0, 6));
+        _rootPanel.Children.Add(DeviceCardWidgets.CreateHint(hint, 0, 6));
 
         // 底部操作行：立即刷新 / 关闭
         var buttons = new Grid();
@@ -188,13 +192,13 @@ public sealed class DeviceCardWindow : Window
             Width = new GridLength(1, GridUnitType.Star)
         });
 
-        var refresh = AcrylicWidgets.CreateActionButton("立即刷新", primary: false);
+        var refresh = DeviceCardWidgets.CreateActionButton("立即刷新", primary: false);
         refresh.Click += (_, _) =>
             UpdateData(DeviceReader.ReadAll(_settings));
         Grid.SetColumn(refresh, 0);
         buttons.Children.Add(refresh);
 
-        var close = AcrylicWidgets.CreateActionButton("关闭", primary: true);
+        var close = DeviceCardWidgets.CreateActionButton("关闭", primary: true);
         close.Click += (_, _) => Close();
         Grid.SetColumn(close, 2);
         buttons.Children.Add(close);
@@ -210,7 +214,7 @@ public sealed class DeviceCardWindow : Window
             : "设备离线";
         string subtitle = r.IsOnline ? "已连接" : "已休眠";
 
-        _rootPanel.Children.Add(AcrylicWidgets.CreateGroupHeader(
+        _rootPanel.Children.Add(DeviceCardWidgets.CreateGroupHeader(
             r.Name, subtitle, hasPrevious));
 
         Brush accent = r.Percent >= 0
@@ -252,7 +256,7 @@ public sealed class DeviceCardWindow : Window
         };
         if (r.Percent > 0)
         {
-            right.Children.Add(AcrylicWidgets.CreateHorizontalBatteryIcon(
+            right.Children.Add(DeviceCardWidgets.CreateHorizontalBatteryIcon(
                 r.Percent, r.IsCharging, accent));
         }
         right.Children.Add(new TextBlock
@@ -271,11 +275,11 @@ public sealed class DeviceCardWindow : Window
         if (r.Percent > 0)
         {
             _rootPanel.Children.Add(
-                AcrylicWidgets.CreateAnimatedProgressBar(r.Percent, accent));
+                DeviceCardWidgets.CreateAnimatedProgressBar(r.Percent, accent));
         }
         else
         {
-            _rootPanel.Children.Add(AcrylicWidgets.CreateHint(
+            _rootPanel.Children.Add(DeviceCardWidgets.CreateHint(
                 r.IsOnline ? "正在读取…" : "唤醒设备后点「立即刷新」重试", 2, 2));
         }
 
@@ -298,24 +302,69 @@ public sealed class DeviceCardWindow : Window
         });
     }
 
+    /// <summary>
+    /// 点击卡片外部收起。
+    ///
+    /// 必须用 GetAsyncKeyState 直读物理按键，**不能用 WPF 的 Mouse.LeftButton**：
+    /// 卡片是 ShowActivated=false（不抢焦点），窗口未激活时 WPF 的鼠标状态
+    /// 一直是 Released，于是「点了外面」永远检测不到、卡片永远关不掉。
+    /// 完整版同样用 GetAsyncKeyState。
+    /// </summary>
     private void OutsideClickTick(object? sender, EventArgs e)
     {
         if (!IsVisible) return;
 
-        bool down = Mouse.LeftButton == MouseButtonState.Pressed
-                    || Mouse.RightButton == MouseButtonState.Pressed;
-        if (down)
+        bool isDown =
+            (UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON) & 0x8000) != 0;
+        bool justPressed = isDown && !_wasPrimaryDown;
+        _wasPrimaryDown = isDown;
+
+        if (!justPressed) return;
+
+        // GetCursorPos 是物理像素，先转成窗口本地 WPF 坐标，
+        // 否则高 DPI 下会把卡片内的点击误判成外部点击。
+        if (!UnmanagedMethods.GetCursorPos(out var pt)) return;
+        Point local = PointFromScreen(new Point(pt.X, pt.Y));
+        var rect = new Rect(0, 0, ActualWidth, ActualHeight);
+        if (!rect.Contains(local))
         {
-            _wasPrimaryDown = true;
+            Hide();
+            _outsideClickTimer.Stop();
+        }
+    }
+
+    /// <summary>
+    /// 在托盘图标上方切换显示/收起。
+    ///
+    /// 复用同一个窗口实例：收起走 Hide() 而不是 Close()。
+    /// Close() 会销毁窗口、下次必须 new 一个，既慢又会让 WPF 反复重建整棵
+    /// 视觉树与渲染资源（用户反馈「每次都像新开一个窗口」）。
+    /// </summary>
+    public void ToggleNear(double screenX, double screenY)
+    {
+        _anchorX = screenX;
+
+        if (IsVisible)
+        {
+            Hide();
+            _outsideClickTimer.Stop();
             return;
         }
 
-        if (_wasPrimaryDown)
-        {
-            _wasPrimaryDown = false;
-            // 点击落在卡片范围之外就收起
-            if (!IsMouseOver) Close();
-        }
+        ThemeService.ApplyAcrylicBackdrop(this);
+
+        // 先量出内容真实高度再定位，避免用旧高度摆错位置
+        Measure(new Size(CardWidth, double.PositiveInfinity));
+        AdjustVerticalPosition();
+
+        Show();
+
+        // 记录按下时左键的真实状态：从托盘点击打开时它通常仍按着，
+        // 若不设这个基准，抬起那一刻会被误判成「点击了外部」而立即关闭。
+        _wasPrimaryDown =
+            (UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON) & 0x8000) != 0;
+
+        _outsideClickTimer.Start();
     }
 
     /// <summary>
@@ -381,29 +430,5 @@ public sealed class DeviceCardWindow : Window
         {
             _adjusting = false;
         }
-    }
-
-    /// <summary>
-    /// 记录托盘图标锚点（物理像素）并（重新）打开卡片。
-    /// 由 TrayContext 在图标被点击时调用。
-    /// </summary>
-    public void ShowNear(double screenX, double screenY)
-    {
-        _anchorX = screenX;
-
-        if (!IsVisible)
-        {
-            Show();
-        }
-
-        // 先按内容测量出真实高度，再定位，避免第一帧用旧高度摆错位置
-        Measure(new Size(CardWidth, double.PositiveInfinity));
-        AdjustVerticalPosition();
-        Activate();
-
-        // 记录按下时左键是否仍处于按下状态：从托盘点击打开时它通常是按下的，
-        // 若不做这个基准，抬起那一刻会被误判为「点击了外部」而立即关闭。
-        _wasPrimaryDown =
-            (UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON) & 0x8000) != 0;
     }
 }

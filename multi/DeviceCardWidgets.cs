@@ -17,7 +17,7 @@ namespace MouseBatteryTray;
 ///
 /// 全部是静态工厂：只产生视觉元素，不持有状态。
 /// </summary>
-public static class AcrylicWidgets
+public static class DeviceCardWidgets
 {
     /// <summary>细腻的横向进度条，挂载后从 0 平滑展开。</summary>
     public static Border CreateAnimatedProgressBar(int percent, System.Windows.Media.Brush accent)

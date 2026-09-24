@@ -91,9 +91,9 @@ internal static class Program
         win.Closed += (_, _) => app.Shutdown();
         app.Startup += (_, _) =>
         {
-            // 没有托盘点击锚点，ShowNear 会退回靠近通知区域的位置
+            // 没有托盘点击锚点，用当前光标位置（离通知区域很近）
             UnmanagedMethods.GetCursorPos(out var pt);
-            win.ShowNear(pt.X, pt.Y);
+            win.ToggleNear(pt.X, pt.Y);
         };
         app.Run();
         return 0;
@@ -408,19 +408,17 @@ internal sealed class TrayContext : IDisposable
     {
         if (e.Button == System.Windows.Forms.MouseButtons.Left)
         {
-            // 左键点击：像完整版那样切换显示/收起
-            if (_card != null && _card.IsVisible)
-            {
-                _card.Close();
-                _card = null;
-            }
-            else
-            {
-                ShowDetails();
-            }
+            ShowDetails();
         }
     }
 
+    /// <summary>
+    /// 显示或收起设备卡片。
+    ///
+    /// 复用同一个窗口实例（收起走 Hide，不 Close）：完整版就是这么做的。
+    /// 早先每次点击都 new 一个窗口，导致每次都重建整棵视觉树，
+    /// 表现为「窗口很大、每次都在同一位置重新弹出」（用户反馈过）。
+    /// </summary>
     private void ShowDetails()
     {
         int ax = AnchorX, ay = AnchorY;
@@ -429,14 +427,11 @@ internal sealed class TrayContext : IDisposable
         {
             _card = new DeviceCardWindow(_readings, _settings, ShowSettings);
             _card.Closed += (_, _) => _card = null;
-            // ShowNear 负责显示并按锚点定位，不要先 Show() 再用默认位置闪现
-            _card.ShowNear(ax, ay);
         }
-        else
-        {
-            _card.UpdateData(_readings);
-            _card.ShowNear(ax, ay);
-        }
+
+        // 先刷新数据，再按锚点切换显示位置
+        _card.UpdateData(_readings);
+        _card.ToggleNear(ax, ay);
     }
 
     private void ShowSettings()

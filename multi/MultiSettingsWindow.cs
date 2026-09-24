@@ -154,12 +154,12 @@ public sealed class MultiSettingsWindow : Window
             critical: true);
         _criticalValue.Text = $"{(int)_criticalSlider.Value}%";
 
-        _notifyToggle = CreateToggle("启用低电量桌面通知", _settings.NotifyEnabled);
+        _notifyToggle = CreateToggle(_settings.NotifyEnabled);
 
         _rootPanel.Children.Add(WrapGroupInCard(
             CreateSliderRow("低电量提醒阈值", _lowSlider, _lowValue, "5%", "50%"),
             CreateSliderRow("严重低电量阈值", _criticalSlider, _criticalValue, "5%", "30%"),
-            CreateToggleRow(_notifyToggle),
+            CreateToggleRow("启用低电量桌面通知", _notifyToggle),
             CreateNoteRow("电量持续下降时会再次提醒，同一电量不会重复提醒；充电中不会提醒。")));
 
         // ── 分组二：后台刷新间隔 ──
@@ -200,23 +200,21 @@ public sealed class MultiSettingsWindow : Window
         // ── 分组三：启用的设备来源 ──
         _rootPanel.Children.Add(CreateGroupHeader("启用的设备来源"));
 
-        _srcLogitech = CreateToggle("罗技（HID++）",
-            _settings.EnabledSources.Contains("logitech"));
-        _srcMchose = CreateToggle("迈从 MCHOSE",
-            _settings.EnabledSources.Contains("mchose"));
-        _srcAtk = CreateToggle("ATK / VXE / VGN",
-            _settings.EnabledSources.Contains("atk"));
+        _srcLogitech = CreateToggle(_settings.EnabledSources.Contains("logitech"));
+        _srcMchose = CreateToggle(_settings.EnabledSources.Contains("mchose"));
+        _srcAtk = CreateToggle(_settings.EnabledSources.Contains("atk"));
 
         _rootPanel.Children.Add(WrapGroupInCard(
-            CreateToggleRow(_srcLogitech),
-            CreateToggleRow(_srcMchose),
-            CreateToggleRow(_srcAtk),
+            CreateToggleRow("罗技（HID++）", _srcLogitech),
+            CreateToggleRow("迈从 MCHOSE", _srcMchose),
+            CreateToggleRow("ATK / VXE / VGN", _srcAtk),
             CreateNoteRow("关闭某来源可避免对其反复探测。")));
 
         // ── 分组四：启动 ──
         _rootPanel.Children.Add(CreateGroupHeader("启动"));
-        _autostartToggle = CreateToggle("开机自动启动", AutoStartService.IsEnabled());
-        _rootPanel.Children.Add(WrapGroupInCard(CreateToggleRow(_autostartToggle)));
+        _autostartToggle = CreateToggle(AutoStartService.IsEnabled());
+        _rootPanel.Children.Add(WrapGroupInCard(
+            CreateToggleRow("开机自动启动", _autostartToggle)));
 
         // ── 底部按钮 ──
         var buttons = new Grid { Margin = new Thickness(0, 4, 0, 0) };
@@ -257,7 +255,7 @@ public sealed class MultiSettingsWindow : Window
 
     private static TextBlock CreateGroupHeader(string text)
     {
-        // 复用完整版的图标按钮样式与配色；分组标题在 AcrylicWidgets 里有同款，
+        // 复用完整版的图标按钮样式与配色；分组标题在 DeviceCardWidgets 里有同款，
         // 但设置页需要左对齐的纯标题（不带副标题与按钮），因此这里保持一致的字号与颜色。
         var header = new TextBlock
         {
@@ -304,14 +302,21 @@ public sealed class MultiSettingsWindow : Window
         return s;
     }
 
-    private static CheckBox CreateToggle(string text, bool isChecked)
+    /// <summary>
+    /// 创建开关本体。
+    ///
+    /// 注意：**不要把文字放进 Content**。FluentToggleSwitchStyle 的模板只渲染
+    /// 一个胶囊开关、没有 ContentPresenter，Content 会被静默丢弃 ——
+    /// 表现为一整排没有文字的空开关（截图核对时发现的）。
+    /// 文字由 <see cref="CreateToggleRow"/> 作为独立 TextBlock 放在旁边。
+    /// </summary>
+    private static CheckBox CreateToggle(bool isChecked)
     {
         var cb = new CheckBox
         {
-            Content = text,
             IsChecked = isChecked,
-            FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
             Cursor = Cursors.Hand
         };
         cb.SetResourceReference(StyleProperty, "FluentToggleSwitchStyle");
@@ -363,11 +368,30 @@ public sealed class MultiSettingsWindow : Window
         return panel;
     }
 
-    private static UIElement CreateToggleRow(CheckBox toggle)
+    /// <summary>开关行：左侧文字标签 + 右侧开关（同一行）。</summary>
+    private static UIElement CreateToggleRow(string label, CheckBox toggle)
     {
-        toggle.Margin = new Thickness(12, 11, 12, 11);
-        toggle.HorizontalAlignment = HorizontalAlignment.Left;
-        return toggle;
+        var grid = new Grid { Margin = new Thickness(12, 11, 12, 11) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1, GridUnitType.Star)
+        });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var text = new TextBlock
+        {
+            Text = label,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        text.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
+        Grid.SetColumn(text, 0);
+        grid.Children.Add(text);
+
+        Grid.SetColumn(toggle, 1);
+        grid.Children.Add(toggle);
+
+        return grid;
     }
 
     private static UIElement CreateNoteRow(string text)

@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using System.Windows;
+using MouseBatteryTray;
 
 namespace MultiTray;
 
@@ -16,8 +17,19 @@ namespace MultiTray;
 /// </summary>
 internal static class FluentStylesLoader
 {
+    /// <summary>
+    /// 资源所在程序集名。
+    ///
+    /// 不能用 Assembly.GetEntryAssembly()：那只在被自己启动时才对。
+    /// 一旦被别的宿主进程加载（自检工具、测试宿主），入口程序集就变成宿主，
+    /// 拼出的 pack URI 指向一个不存在该资源的程序集，三次尝试全部失败、
+    /// 样式静默失效（表现为开关退化成系统默认方形复选框）。
+    ///
+    /// FluentStyles.xaml 与 ThemeService 一起编在本程序集里，
+    /// 因此直接问 ThemeService 类型属于哪个程序集，永远是正确答案。
+    /// </summary>
     private static readonly string AssemblyName =
-        Assembly.GetEntryAssembly()?.GetName().Name ?? "multi-tray";
+        typeof(ThemeService).Assembly.GetName().Name ?? "multi-tray";
 
     public static void Load(ResourceDictionary target)
     {

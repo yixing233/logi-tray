@@ -30,6 +30,7 @@ __pycache__/
 /dwmtest/
 /native_probe/
 /wpf_test/
+/_shots/
 
 # ---- Native scratch files (keep build.bat, src/, README.md) ----
 /native/*.py

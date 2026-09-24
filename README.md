@@ -21,7 +21,8 @@
 </p>
 
 <p align="center">
-  提供<b>完整版</b>（亚克力毛玻璃 + 三种图标样式）与<b>轻量版</b>（低占用，纯数字图标）两个版本。
+  提供<b>完整版</b>（亚克力毛玻璃 + 三种图标样式）、<b>轻量版</b>（低占用，纯数字图标）
+  与<b>多品牌版</b>（罗技 / 迈从 / ATK 多设备同屏）三个版本。
 </p>
 
 ---
@@ -120,7 +121,7 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 
 | 功能 | 完整版 | 轻量版 | 多品牌版 |
 | --- | :---: | :---: | :---: |
-| 亚克力毛玻璃背景 | ✅ | ❌ 纯色底板 | ❌ 纯色底板 |
+| 亚克力毛玻璃背景 | ✅ | ❌ 纯色底板 | ✅ |
 | 托盘图标样式 | 电池 / 环形 / 数字 | 仅数字 | 仅数字 |
 | 外观主题切换 | ✅ 跟随系统 / 浅色 / 深色 | 自动跟随系统 | 自动跟随系统 |
 | 支持品牌 | 仅罗技 | 仅罗技 | 罗技 / 迈从 / ATK 等 |
@@ -136,6 +137,10 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 轻量版之所以省内存，是因为它**不加载 WPF 渲染栈**（纯 WinForms 实现），而不是把特效关掉——
 WPF 的渲染栈在第一次显示窗口后就会常驻进程，这才是完整版内存占用的主要来源。
 
+多品牌版与完整版**共用同一套亚克力外观层**：直接编译完整版的 `wpf/ThemeService.cs`，
+卡片构建块（电池图标、动画进度条、分组标题）也由两个版本共用，因此二者的视觉表现保持一致。
+`wpf/` 自身保持独立、不被多品牌版改动。
+
 ### 多品牌版说明
 
 多台设备时，托盘图标显示**电量最低**的那台在线设备，一眼就能看到最需要充电的。右上角的小圆点表示还有其它设备，把鼠标移到图标上可看到全部设备。
@@ -144,7 +149,7 @@ WPF 的渲染栈在第一次显示窗口后就会常驻进程，这才是完整�
 
 ```bat
 multi-tray.exe --list             :: 列出检测到的设备与当前电量
-multi-tray.exe --probe-atk        :: 排查 ATK 设备（打印原始收发字节）
+multi-tray.exe --diag-atk         :: 排查 ATK 设备（打印原始收发字节）
 multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件）
 ```
 
@@ -172,7 +177,7 @@ multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件�
 > **回显防护是必要的**：回显里的 `[7]=0x01` 若不排除，会被误报成「**1%**」。
 > 程序有两道防线（响应头校验 + 回显比对），并有 9 项专门单测覆盖。
 
-若你的 ATK 键盘显示离线，运行 `multi-tray.exe --probe-atk`，
+若你的 ATK 键盘显示离线，运行 `multi-tray.exe --diag-atk`，
 它会打印每个接口的原始收发字节，便于进一步定位。
 
 ### 安装方式
@@ -231,7 +236,7 @@ multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件�
 - [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 - Visual Studio 2022 或 C++ 编译器（MSVC / Clang）
 
-### 编译两个界面版本
+### 编译三个界面版本
 
 ```powershell
 # 克隆仓库
@@ -243,19 +248,26 @@ dotnet build wpf/MouseBatteryTray.csproj -c Release
 
 # 轻量版（WinForms，生成至 lite/bin/Release/net8.0-windows/）
 dotnet build lite/LogiTrayLite.csproj -c Release
+
+# 多品牌版（WPF，生成至 multi/bin/Release/net8.0-windows/）
+dotnet build multi/MultiTray.csproj -c Release
 ```
 
 ### 项目结构
 
 ```
-shared/    两个版本共用的核心逻辑（电量轮询、HID 调用、配置、自启、配色）
-wpf/       完整版界面（WPF + 亚克力）
-lite/      轻量版界面（WinForms）
-native/    C++ HID++ 2.0 原生读取程序
+shared/     两个罗技版本共用的核心逻辑（电量轮询、HID 调用、配置、自启、配色）
+wpf/        完整版界面（WPF + 亚克力）
+lite/       轻量版界面（WinForms）
+multi/      多品牌版界面（WPF，复用 wpf/ 的亚克力外观层）
+native/     C++ HID++ 2.0 原生读取程序
 ```
 
-两个版本通过 `Compile Include="..\shared\*.cs"` 编译**同一份**核心源码，
+完整版与轻量版通过 `Compile Include="..\shared\*.cs"` 编译**同一份**核心源码，
 核心逻辑与配色只有一处定义，不会出现两个版本行为不一致的问题。
+
+多品牌版额外直接编译 `wpf/ThemeService.cs`（而非复制一份），
+这样两版的亚克力外观必然一致，也不会各自漂移。
 
 ### 编译原生 HID++ reader
 ```bat

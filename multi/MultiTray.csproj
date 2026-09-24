@@ -33,12 +33,14 @@
 
   <ItemGroup>
     <!--
-      直接引用完整版（wpf/）的主题服务与 Fluent 样式，**不复制**。
-      复制会造成两份真相并逐渐漂移（实测复制后两份文件哈希已经不同）。
-      这样完整版一个字节都不用改，multi-tray 也必然与它视觉一致。
+      直接引用完整版（wpf/）的 ThemeService，**不复制**。
+      复制会产生两份真相并逐渐漂移（实测复制后两文件哈希立刻不同）。
+      这样 wpf/ 一个字节都不用改，multi-tray 也必然与它主题一致。
+
+      卡片构建块（DeviceCardWidgets.cs）是本项目自己的文件，
+      由 SDK 默认包含，无需在此声明。
     -->
     <Compile Include="..\wpf\ThemeService.cs" LinkBase="SharedWpf" />
-    <Compile Include="..\shared-wpf\AcrylicWidgets.cs" LinkBase="SharedWpf" />
   </ItemGroup>
 
   <ItemGroup>
