@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.Linq;
 using System.Threading;
-using System.Windows.Forms;
+using System.Windows;
+using System.Windows.Threading;
 using MouseBatteryTray;
 
 namespace MultiTray;
@@ -11,9 +11,8 @@ namespace MultiTray;
 /// <summary>
 /// 多品牌键鼠耳机电量工具。
 ///
-/// 与罗技专用版的关系：并存的第三个应用，界面与共享代码风格一致，
-/// 但面向多设备多品牌。刻意**不含续航预测**与历史曲线 ——
-/// 只做电量显示与低电量预警。
+/// 与罗技专用版的关系：并存的第三个应用，复用同一套亚克力 Fluent 外观层
+/// （shared-wpf/）。刻意不含续航预测与历史曲线 —— 只做电量显示与低电量预警。
 /// </summary>
 internal static class Program
 {
@@ -28,10 +27,10 @@ internal static class Program
         {
             // 命令行模式下强制 UTF-8 输出。
             //
-            // 只设 Console.OutputEncoding 是不够的：当 stdout 被重定向到管道
-            // 时，.NET 仍按控制台代码页写出，实测包内程序输出的是 GBK，
-            // 调用方按 UTF-8 解析就全是乱码。因此这里在设置编码之外，
-            // 还显式打开一个 UTF-8 的 stdout 写入器。
+            // 只设 Console.OutputEncoding 不够：本项目是 WinExe（GUI 子系统），
+            // 设置 OutputEncoding 会让 .NET 重建 stdout 写入器且拿不到有效句柄，
+            // 结果是**输出被整个吞掉**（实测重定向时 0 字节）。
+            // 因此用 SetOut 接管 stdout。详见 ConsoleSession。
             ConsoleSession.UseUtf8Output();
 
             switch (args[0])
@@ -41,15 +40,12 @@ internal static class Program
                 case "--list":
                     return ListDevices();
                 case "--diag-atk":
-                    return AtkDiagnostics.Run();
                 case "--probe-atk":
                 case "--probe-atk-web":
                 case "--probe-z87":
                 case "--probe-proto1":
                 case "--probe-transport":
-                    // 旧名称保留，统一转到合并后的诊断工具
                     return AtkDiagnostics.Run();
-                // 下面两个用于核对界面（平时不需要）：直接打开窗口便于截图检查
                 case "--show-details":
                     return ShowDetailsOnce();
                 case "--show-settings":
@@ -61,40 +57,54 @@ internal static class Program
             }
         }
 
-        ApplicationConfiguration.Initialize();
-
         // 单实例：多开会导致托盘出现两个图标、通知重复
         using var mutex = new Mutex(true, AppIdentity.MutexName, out bool created);
         if (!created) return 0;
 
-        Application.Run(new TrayContext());
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+
+        var settings = MultiSettings.Load();
+        ThemeService.SetThemeMode(settings.ThemeMode);
+        ThemeService.SetAcrylicEnabled(settings.AcrylicEnabled);
+
+        var context = new TrayContext(settings, app);
+
+        app.Startup += (_, _) =>
+        {
+            context.Start();
+        };
+
+        app.Run();
+        context.Dispose();
         return 0;
     }
 
-    /// <summary>直接打开设备列表窗口（供界面核对/截图使用）。</summary>
     private static int ShowDetailsOnce()
     {
-        ApplicationConfiguration.Initialize();
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var settings = MultiSettings.Load();
+        ThemeService.SetThemeMode(settings.ThemeMode);
+        ThemeService.SetAcrylicEnabled(settings.AcrylicEnabled);
+
         var readings = DeviceReader.ReadAll(settings);
-        bool dark = settings.ThemeMode switch
-        {
-            "dark" => true,
-            "light" => false,
-            _ => AppPalette.IsSystemDark(),
-        };
-        using var form = new DetailsForm(readings, dark, settings);
-        form.ShowDialog();
+        var win = new DeviceCardWindow(readings, settings, () => { });
+        win.Closed += (_, _) => app.Shutdown();
+        app.Startup += (_, _) => win.Show();
+        app.Run();
         return 0;
     }
 
-    /// <summary>直接打开设置窗口（供界面核对/截图使用）。</summary>
     private static int ShowSettingsOnce()
     {
-        ApplicationConfiguration.Initialize();
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var settings = MultiSettings.Load();
-        using var form = new SettingsForm(settings);
-        form.ShowDialog();
+        ThemeService.SetThemeMode(settings.ThemeMode);
+        ThemeService.SetAcrylicEnabled(settings.AcrylicEnabled);
+
+        var win = new MultiSettingsWindow(settings);
+        win.Closed += (_, _) => app.Shutdown();
+        app.Startup += (_, _) => win.Show();
+        app.Run();
         return 0;
     }
 
@@ -107,6 +117,8 @@ internal static class Program
         Console.WriteLine("  multi-tray.exe --list         列出检测到的设备与当前电量后退出");
         Console.WriteLine("  multi-tray.exe --diag-atk     诊断 ATK 设备（打印原始收发字节）");
         Console.WriteLine("  multi-tray.exe --test-protocols  运行协议解析层自检（无需硬件）");
+        Console.WriteLine("  multi-tray.exe --show-details    直接打开设备电量窗口");
+        Console.WriteLine("  multi-tray.exe --show-settings   直接打开设置窗口");
         Console.WriteLine("  multi-tray.exe --help         显示本帮助");
     }
 
@@ -163,41 +175,51 @@ internal static class Program
 
 /// <summary>
 /// 托盘运行上下文：定时轮询、刷新图标、触发低电量通知、承载菜单。
+///
+/// 托盘图标本身仍用 WinForms 的 NotifyIcon（WPF 没有等价物），
+/// 但所有窗口都是 WPF 亚克力窗口。
 /// </summary>
-internal sealed class TrayContext : ApplicationContext
+internal sealed class TrayContext : IDisposable
 {
-    private readonly NotifyIcon _tray;
-    private readonly System.Windows.Forms.Timer _timer;
+    private readonly System.Windows.Forms.NotifyIcon _tray;
+    private readonly DispatcherTimer _timer;
     private readonly MultiSettings _settings;
+    private readonly Application _app;
 
     private List<DeviceReading> _readings = new();
-    private Icon? _currentIcon;
+    private System.Drawing.Icon? _currentIcon;
     private bool _dark;
+    private DeviceCardWindow? _card;
+    private MultiSettingsWindow? _settingsWindow;
 
     /// <summary>各设备上次已通知的电量，用于避免同一电量反复提醒。</summary>
     private readonly Dictionary<string, int> _lastNotified = new();
 
-    public TrayContext()
+    public TrayContext(MultiSettings settings, Application app)
     {
-        _settings = MultiSettings.Load();
+        _settings = settings;
+        _app = app;
         _dark = ResolveDark();
 
-        _tray = new NotifyIcon
+        _tray = new System.Windows.Forms.NotifyIcon
         {
             Visible = true,
             ContextMenuStrip = BuildMenu(),
         };
         _tray.MouseClick += OnTrayClick;
-        _tray.DoubleClick += (_, _) => ShowDetails();
 
-        _timer = new System.Windows.Forms.Timer
+        _timer = new DispatcherTimer
         {
-            Interval = Math.Max(5, _settings.Interval) * 1000,
+            Interval = TimeSpan.FromSeconds(Math.Max(5, _settings.Interval)),
         };
         _timer.Tick += (_, _) => Refresh();
-        _timer.Start();
+    }
 
+    /// <summary>在 WPF 消息循环启动后开始轮询。</summary>
+    public void Start()
+    {
         Refresh();
+        _timer.Start();
     }
 
     private bool ResolveDark() => _settings.ThemeMode switch
@@ -207,16 +229,20 @@ internal sealed class TrayContext : ApplicationContext
         _ => AppPalette.IsSystemDark(),
     };
 
-    private ContextMenuStrip BuildMenu()
+    private System.Windows.Forms.ContextMenuStrip BuildMenu()
     {
-        var menu = new ContextMenuStrip { ShowImageMargin = false };
+        var menu = new System.Windows.Forms.ContextMenuStrip { ShowImageMargin = false };
 
-        menu.Items.Add(new ToolStripMenuItem("查看设备", null, (_, _) => ShowDetails()));
-        menu.Items.Add(new ToolStripMenuItem("立即刷新", null, (_, _) => Refresh()));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("设置", null, (_, _) => ShowSettings()));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("退出", null, (_, _) => ExitApp()));
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(
+            "查看设备", null, (_, _) => ShowDetails()));
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(
+            "立即刷新", null, (_, _) => Refresh()));
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(
+            "设置", null, (_, _) => ShowSettings()));
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(
+            "退出", null, (_, _) => ExitApp()));
 
         return menu;
     }
@@ -229,6 +255,11 @@ internal sealed class TrayContext : ApplicationContext
             UpdateIcon();
             UpdateTooltip();
             CheckNotifications();
+
+            if (_card != null && _card.IsVisible)
+            {
+                _card.UpdateData(_readings);
+            }
         }
         catch
         {
@@ -278,8 +309,8 @@ internal sealed class TrayContext : ApplicationContext
     /// <summary>
     /// 低电量预警。
     ///
-    /// 只在电量确实下降、且与上次已通知的值不同时才提醒，
-    /// 避免同一个电量每轮都弹一次（这是低电量提醒最常见的骚扰来源）。
+    /// 只在电量与上次已通知的值不同、且未充电时才提醒，
+    /// 避免同一个电量每轮都弹一次（低电量提醒最常见的骚扰来源）。
     /// </summary>
     private void CheckNotifications()
     {
@@ -306,14 +337,14 @@ internal sealed class TrayContext : ApplicationContext
                 ? $"{r.Name} 仅剩 {r.Percent}%，请尽快充电。"
                 : $"{r.Name} 剩余 {r.Percent}%，建议充电。";
             _tray.BalloonTipIcon = critical
-                ? ToolTipIcon.Warning
-                : ToolTipIcon.Info;
+                ? System.Windows.Forms.ToolTipIcon.Warning
+                : System.Windows.Forms.ToolTipIcon.Info;
             _tray.ShowBalloonTip(6000);
 
             _lastNotified[r.Key] = r.Percent;
         }
 
-        // 已充电或已换设备的记录清掉，下次低电量能重新提醒
+        // 已离线或已换设备的记录清掉，下次低电量能重新提醒
         var keys = _readings.Where(x => x.IsOnline).Select(x => x.Key).ToHashSet();
         foreach (var stale in _lastNotified.Keys.Where(k => !keys.Contains(k)).ToList())
         {
@@ -321,27 +352,47 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
-    private void OnTrayClick(object? sender, MouseEventArgs e)
+    private void OnTrayClick(object? sender, System.Windows.Forms.MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Left) ShowDetails();
+        if (e.Button == System.Windows.Forms.MouseButtons.Left) ShowDetails();
     }
 
     private void ShowDetails()
     {
-        using var form = new DetailsForm(_readings, _dark, _settings);
-        form.ShowDialog();
+        if (_card == null || !_card.IsLoaded)
+        {
+            _card = new DeviceCardWindow(_readings, _settings, ShowSettings);
+            _card.Closed += (_, _) => _card = null;
+            _card.Show();
+        }
+        else
+        {
+            _card.UpdateData(_readings);
+            _card.Activate();
+        }
     }
 
     private void ShowSettings()
     {
-        using var form = new SettingsForm(_settings);
-        if (form.ShowDialog() == DialogResult.OK)
+        if (_settingsWindow == null || !_settingsWindow.IsLoaded)
         {
-            // 配置已由 SettingsForm.Save() 落盘，这里只同步运行期状态。
-            // 不要在调用方重复保存 —— 那会让「直接打开设置窗口」的路径漏存。
-            _dark = ResolveDark();
-            _timer.Interval = Math.Max(5, _settings.Interval) * 1000;
-            Refresh();
+            _settingsWindow = new MultiSettingsWindow(_settings);
+            _settingsWindow.Closed += (_, _) =>
+            {
+                _settingsWindow = null;
+                // 配置已由设置窗口自行落盘，这里只同步运行期状态
+                _dark = ResolveDark();
+                ThemeService.SetThemeMode(_settings.ThemeMode);
+                ThemeService.SetAcrylicEnabled(_settings.AcrylicEnabled);
+                _timer.Interval = TimeSpan.FromSeconds(Math.Max(5, _settings.Interval));
+                Refresh();
+            };
+            _settingsWindow.Show();
+            _settingsWindow.Activate();
+        }
+        else
+        {
+            _settingsWindow.Activate();
         }
     }
 
@@ -351,6 +402,15 @@ internal sealed class TrayContext : ApplicationContext
         _tray.Visible = false;
         _tray.Dispose();
         _currentIcon?.Dispose();
-        ExitThread();
+        _settingsWindow?.Close();
+        _card?.Close();
+        _app.Shutdown();
+    }
+
+    public void Dispose()
+    {
+        _timer.Stop();
+        _tray.Dispose();
+        _currentIcon?.Dispose();
     }
 }

@@ -1,23 +1,41 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.Linq;
 using System.Windows.Forms;
 using MouseBatteryTray;
 
+// 托盘图标是 GDI 绘制的，而 GlobalUsings 把 Color/Brush/Font 等别名指向了 WPF。
+// 这里显式用 Gdi* 别名，避免与 WPF 同名类型冲突（与完整版 TrayIconManager 的做法一致）。
+using GdiColor = System.Drawing.Color;
+using GdiBrush = System.Drawing.SolidBrush;
+using GdiFont = System.Drawing.Font;
+using GdiFontStyle = System.Drawing.FontStyle;
+using GdiBitmap = System.Drawing.Bitmap;
+using GdiGraphics = System.Drawing.Graphics;
+using GdiIcon = System.Drawing.Icon;
+using GdiPen = System.Drawing.Pen;
+using GdiPixelFormat = System.Drawing.Imaging.PixelFormat;
+using GdiSmoothingMode = System.Drawing.Drawing2D.SmoothingMode;
+using GdiInterpolationMode = System.Drawing.Drawing2D.InterpolationMode;
+using GdiPixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode;
+using GdiLineCap = System.Drawing.Drawing2D.LineCap;
+using GdiTextRenderingHint = System.Drawing.Text.TextRenderingHint;
+using GdiRectangleF = System.Drawing.RectangleF;
+using GdiRectangle = System.Drawing.Rectangle;
+using GdiStringFormat = System.Drawing.StringFormat;
+using GdiStringAlignment = System.Drawing.StringAlignment;
+
 namespace MultiTray;
 
 /// <summary>
-/// 托盘图标渲染。
+/// 托盘图标渲染（GDI+）。
 ///
 /// 设计取向与用户的需求一致：**显示电量最低的那台设备**。
 /// 多设备时一眼看到最需要注意的那台，正是低电量预警的核心诉求。
 ///
 /// 图标样式沿用罗技版已验证的实现方式：
 ///   * 4 倍超采样后高质量缩放到 16px，避免细笔画出现锯齿
-///   * 三位数、两位数、一位数分别用不同字号，保证 "100%" 不被裁掉
+///   * 三位数、两位数、一位数分别用不同字号，保证 "100" 不被裁掉
 /// </summary>
 internal static class TrayIconRenderer
 {
@@ -25,15 +43,15 @@ internal static class TrayIconRenderer
     private const int SuperSample = 4;
 
     /// <summary>把一组读数画成托盘图标。列表为空时画「无设备」。</summary>
-    public static Icon Render(IReadOnlyList<DeviceReading> readings, bool dark)
+    public static GdiIcon Render(IReadOnlyList<DeviceReading> readings, bool dark)
     {
         int size = IconSize * SuperSample;
-        using var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
-        using (var g = Graphics.FromImage(bmp))
+        using var bmp = new GdiBitmap(size, size, GdiPixelFormat.Format32bppArgb);
+        using (var g = GdiGraphics.FromImage(bmp))
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            g.Clear(Color.Transparent);
+            g.SmoothingMode = GdiSmoothingMode.AntiAlias;
+            g.TextRenderingHint = GdiTextRenderingHint.AntiAliasGridFit;
+            g.Clear(GdiColor.Transparent);
 
             // 在「16 单位」坐标系里绘制，由变换放大到超采样画布。
             //
@@ -44,12 +62,12 @@ internal static class TrayIconRenderer
             Draw(g, IconSize, readings, dark);
         }
 
-        using var scaled = new Bitmap(IconSize, IconSize, PixelFormat.Format32bppArgb);
-        using (var g2 = Graphics.FromImage(scaled))
+        using var scaled = new GdiBitmap(IconSize, IconSize, GdiPixelFormat.Format32bppArgb);
+        using (var g2 = GdiGraphics.FromImage(scaled))
         {
-            g2.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g2.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g2.DrawImage(bmp, new Rectangle(0, 0, IconSize, IconSize));
+            g2.InterpolationMode = GdiInterpolationMode.HighQualityBicubic;
+            g2.PixelOffsetMode = GdiPixelOffsetMode.HighQuality;
+            g2.DrawImage(bmp, new GdiRectangle(0, 0, IconSize, IconSize));
         }
 
         IntPtr h = scaled.GetHicon();
@@ -57,8 +75,8 @@ internal static class TrayIconRenderer
         {
             // FromHandle 不接管句柄所有权，必须自己克隆一份再销毁原句柄，
             // 否则每次刷新都会泄漏一个 HICON（罗技版就踩过这个坑）。
-            using var tmp = Icon.FromHandle(h);
-            var copy = (Icon)tmp.Clone();
+            using var tmp = GdiIcon.FromHandle(h);
+            var copy = (GdiIcon)tmp.Clone();
             return copy;
         }
         finally
@@ -70,7 +88,7 @@ internal static class TrayIconRenderer
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr handle);
 
-    private static void Draw(Graphics g, int size, IReadOnlyList<DeviceReading> readings,
+    private static void Draw(GdiGraphics g, int size, IReadOnlyList<DeviceReading> readings,
                              bool dark)
     {
         // 选出要显示的那台：优先在线且有电量，其中取电量最低者
@@ -88,11 +106,11 @@ internal static class TrayIconRenderer
         DrawBattery(g, size, target, dark, showBadge, online.Count);
     }
 
-    private static void DrawBattery(Graphics g, int size, DeviceReading r, bool dark,
+    private static void DrawBattery(GdiGraphics g, int size, DeviceReading r, bool dark,
                                     bool showBadge, int deviceCount)
     {
         var rgb = AppPalette.GetBatteryColor(r.Percent, r.IsCharging);
-        var color = Color.FromArgb(rgb.R, rgb.G, rgb.B);
+        var color = GdiColor.FromArgb(rgb.R, rgb.G, rgb.B);
 
         // 全部坐标以 16 为单位（调用方已按超采样倍数放大）。
         //
@@ -104,17 +122,17 @@ internal static class TrayIconRenderer
         string text = r.Percent.ToString();
         float fontSize = text.Length >= 3 ? 7.5f : (text.Length == 2 ? 10.0f : 14.0f);
 
-        using var font = new Font("Segoe UI", fontSize, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var font = new GdiFont("Segoe UI", fontSize, GdiFontStyle.Bold, System.Drawing.GraphicsUnit.Pixel);
         // 文字区高度 13.5，底部 2.5 留给电量条
-        var rect = new RectangleF(0, 0, size, 13.5f);
-        using var sf = new StringFormat
+        var rect = new GdiRectangleF(0, 0, size, 13.5f);
+        using var sf = new GdiStringFormat
         {
-            Alignment = StringAlignment.Center,
-            LineAlignment = StringAlignment.Center,
+            Alignment = GdiStringAlignment.Center,
+            LineAlignment = GdiStringAlignment.Center,
             // 不允许自动换行，避免 "100" 被折成两行
-            FormatFlags = StringFormatFlags.NoWrap,
+            FormatFlags = System.Drawing.StringFormatFlags.NoWrap,
         };
-        using var textBrush = new SolidBrush(color);
+        using var textBrush = new GdiBrush(color);
         g.DrawString(text, font, textBrush, rect, sf);
 
         // 底部电量条：直观给出剩余比例
@@ -123,13 +141,13 @@ internal static class TrayIconRenderer
         float frac = Math.Clamp(r.Percent / 100f, 0f, 1f);
         float full = size * frac;
 
-        using var trackBrush = new SolidBrush(dark
-            ? Color.FromArgb(110, 110, 110)
-            : Color.FromArgb(200, 200, 200));
+        using var trackBrush = new GdiBrush(dark
+            ? GdiColor.FromArgb(110, 110, 110)
+            : GdiColor.FromArgb(200, 200, 200));
         g.FillRectangle(trackBrush, 0f, barY, size, barH);
         if (full > 0.5f)
         {
-            using var fillBrush = new SolidBrush(color);
+            using var fillBrush = new GdiBrush(color);
             g.FillRectangle(fillBrush, 0f, barY, full, barH);
         }
 
@@ -137,34 +155,34 @@ internal static class TrayIconRenderer
         if (showBadge && deviceCount > 1)
         {
             const float mark = 3.4f;
-            using var markBrush = new SolidBrush(dark
-                ? Color.FromArgb(250, 250, 250)
-                : Color.FromArgb(45, 45, 45));
+            using var markBrush = new GdiBrush(dark
+                ? GdiColor.FromArgb(250, 250, 250)
+                : GdiColor.FromArgb(45, 45, 45));
             g.FillEllipse(markBrush, size - mark - 0.5f, 0.5f, mark, mark);
         }
     }
 
-    private static void DrawNoData(Graphics g, int size, bool hasDevices, bool dark)
+    private static void DrawNoData(GdiGraphics g, int size, bool hasDevices, bool dark)
     {
-        var color = dark ? Color.FromArgb(190, 190, 190) : Color.FromArgb(110, 110, 110);
+        var color = dark ? GdiColor.FromArgb(190, 190, 190) : GdiColor.FromArgb(110, 110, 110);
         if (!hasDevices)
         {
-            using var font = new Font("Segoe UI", 11f, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var brush = new SolidBrush(color);
-            using var sf = new StringFormat
+            using var font = new GdiFont("Segoe UI", 11f, GdiFontStyle.Bold, System.Drawing.GraphicsUnit.Pixel);
+            using var brush = new GdiBrush(color);
+            using var sf = new GdiStringFormat
             {
-                Alignment = StringAlignment.Center,
-                LineAlignment = StringAlignment.Center,
+                Alignment = GdiStringAlignment.Center,
+                LineAlignment = GdiStringAlignment.Center,
             };
-            g.DrawString("?", font, brush, new RectangleF(0, -0.5f, size, size), sf);
+            g.DrawString("?", font, brush, new GdiRectangleF(0, -0.5f, size, size), sf);
             return;
         }
 
         // 有设备但都读不到 → 画一条横线表示离线
-        using var pen = new Pen(color, 2.0f)
+        using var pen = new GdiPen(color, 2.0f)
         {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
+            StartCap = GdiLineCap.Round,
+            EndCap = GdiLineCap.Round,
         };
         float y = size / 2f;
         g.DrawLine(pen, size * 0.22f, y, size * 0.78f, y);

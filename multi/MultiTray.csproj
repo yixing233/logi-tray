@@ -5,16 +5,21 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>false</UseWPF>
+    <!--
+      与完整版一致启用 WPF：多品牌版复用同一套亚克力 Fluent 外观层
+      （shared-wpf/ThemeService.cs + FluentStyles.xaml），不再用朴素 WinForms。
+    -->
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>multi-tray</AssemblyName>
     <Product>multi-tray</Product>
     <Title>multi-tray</Title>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <RootNamespace>MultiTray</RootNamespace>
     <StartupObject>MultiTray.Program</StartupObject>
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
 
@@ -23,11 +28,22 @@
     <Compile Include="..\shared\AppIdentity.cs" LinkBase="Shared" />
     <Compile Include="..\shared\AppPalette.cs" LinkBase="Shared" />
     <Compile Include="..\shared\AutoStartService.cs" LinkBase="Shared" />
+    <Compile Include="..\shared\UnmanagedMethods.cs" LinkBase="Shared" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 允许图标自检宿主访问 internal 渲染逻辑，用于无实机时核对显示 -->
-    <InternalsVisibleTo Include="iconshot" />
+    <!--
+      直接引用完整版（wpf/）的主题服务与 Fluent 样式，**不复制**。
+      复制会造成两份真相并逐渐漂移（实测复制后两份文件哈希已经不同）。
+      这样完整版一个字节都不用改，multi-tray 也必然与它视觉一致。
+    -->
+    <Compile Include="..\wpf\ThemeService.cs" LinkBase="SharedWpf" />
+    <Compile Include="..\shared-wpf\AcrylicWidgets.cs" LinkBase="SharedWpf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 允许界面自检宿主访问 internal 类型，用于注入合成快照核对布局 -->
+    <InternalsVisibleTo Include="multishot" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,13 +54,31 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lucide 图标字体：直接引用完整版那份，避免重复 858KB -->
+    <Content Include="..\wpf\Fonts\lucide.ttf" Link="Fonts\lucide.ttf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
-      罗技读取程序。它是本项目读取罗技设备电量的唯一实现，
+      罗技读取程序。它是本工具读取罗技设备电量的唯一实现，
       必须与主程序同目录，否则罗技那一栏会一直显示离线。
     -->
     <Content Include="..\native\build\mouse-tray.exe" Link="mouse-tray.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <!--
+    FluentStyles.xaml 由项目内的副本提供（WPF 的 pack URI 对跨项目链接的 XAML
+    解析不稳健，因此保留项目内副本）。内容在构建前从完整版的唯一真相
+    wpf/FluentStyles.xaml 同步过来，保证两版样式必然一致。
+  -->
+  <Target Name="SyncFluentStyles" BeforeTargets="BeforeBuild">
+    <Copy SourceFiles="..\wpf\FluentStyles.xaml"
+          DestinationFiles="FluentStyles.xaml"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>
