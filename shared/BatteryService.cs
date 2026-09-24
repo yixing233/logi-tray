@@ -104,40 +104,60 @@ public sealed class BatteryService : IDisposable
                     string output = p.StandardOutput.ReadToEnd();
                     p.WaitForExit(3000);
 
-                    // 严谨正则解析：匹配 "G304 Lightspeed Wireless Gaming Mouse: 89% · 放电中"
+                    // 原生读取器每行格式："设备名: 89% · 放电中 · 良好"
+                    // 电量必须只在**冒号之后**的部分里找：设备名本身可能含
+                    // 数字和百分号（例如 "G502 100% Edition"），若整行匹配就会
+                    // 先命中设备名里的 100%，把电量读错。
                     foreach (string rawLine in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                     {
                         string line = rawLine.Trim();
-                        var pctMatch = Regex.Match(line, @"(\d{1,3})%");
-                        if (pctMatch.Success)
+                        int colon = line.IndexOf(':');
+                        if (colon <= 0)
                         {
-                            int colon = line.IndexOf(':');
-                            if (colon > 0)
-                            {
-                                deviceName = line[..colon].Trim();
-                            }
-
-                            if (int.TryParse(pctMatch.Groups[1].Value, out int pVal) && pVal > 0 && pVal <= 100)
-                            {
-                                percent = pVal;
-                            }
-
-                            if (line.Contains("充电"))
-                            {
-                                statusText = "充电中";
-                                isCharging = true;
-                            }
-                            else if (line.Contains("满"))
-                            {
-                                statusText = "放电中";
-                                levelText = "满";
-                            }
-                            else if (line.Contains("良好"))
-                            {
-                                levelText = "良好";
-                            }
-                            break;
+                            continue;
                         }
+
+                        deviceName = line[..colon].Trim();
+                        string tail = line[(colon + 1)..];
+
+                        var pctMatch = Regex.Match(tail, @"(\d{1,3})%");
+                        if (!pctMatch.Success)
+                        {
+                            continue;
+                        }
+
+                        if (int.TryParse(pctMatch.Groups[1].Value, out int pVal) && pVal > 0 && pVal <= 100)
+                        {
+                            percent = pVal;
+                        }
+
+                        // 状态与档位文字只看冒号之后的电量区，避免设备名里的
+                        // 字（如 "PRO"、"满"）干扰判断。
+                        //
+                        // 注意顺序：「已充满」里并不含「充电」这个连续子串，
+                        // 若先判「充电」会漏掉满电状态，把插着线的鼠标显示成
+                        // 放电中，因此必须把充满放在最前面判定。
+                        if (tail.Contains("充满"))
+                        {
+                            statusText = "已充满";
+                            isCharging = false;
+                            levelText = "满";
+                        }
+                        else if (tail.Contains("充电"))
+                        {
+                            statusText = "充电中";
+                            isCharging = true;
+                        }
+                        else if (tail.Contains("满"))
+                        {
+                            statusText = "放电中";
+                            levelText = "满";
+                        }
+                        else if (tail.Contains("良好"))
+                        {
+                            levelText = "良好";
+                        }
+                        break;
                     }
                 }
             }

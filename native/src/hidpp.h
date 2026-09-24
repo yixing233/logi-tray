@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 #include <optional>
-
 namespace hidpp {
 
 // ---------------------------------------------------------------- 协议常量
@@ -24,6 +23,8 @@ constexpr uint16_t kFeatureDeviceName       = 0x0005;
 constexpr uint16_t kFeatureBatteryStatus    = 0x1000;
 constexpr uint16_t kFeatureBatteryVoltage   = 0x1001;
 constexpr uint16_t kFeatureUnifiedBattery   = 0x1004;
+constexpr uint16_t kFeatureAdcMeasurement   = 0x1F20;
+constexpr uint16_t kFeatureCenturionSoc     = 0x0104;
 
 // function **序号**（不是内核写法里那个已左移的字节值）
 constexpr uint8_t kFnGetFeature             = 0x0;
@@ -60,63 +61,26 @@ struct Reading {
     int         externalPower = -1;
     int         deviceIndex = 0;
     int         voltageMv = 0;    // 0 表示未读到
+    uint16_t    sourceFeature = 0;// 读数来自哪个电量特性（便于诊断）
+    bool        percentInferred = false;  // 百分比由档位/电压推算而非设备直报
 };
 
 // 充电状态（对应内核 hidpp20_unifiedbattery_map_status）
-inline std::string ChargingText(int state) {
-    switch (state) {
-        case 0: return u8"放电中";
-        case 1: return u8"充电中";
-        case 2: return u8"充电中（慢充）";
-        case 3: return u8"已充满";
-        case 4: return u8"充电异常";
-        default: {
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), u8"未知 (0x%02X)", state);
-            return buf;
-        }
-    }
-}
+//
+// 实现已移到 battery.cpp 的纯解析层（那里可脱机单测），这里保留同名包装，
+// 避免调用点散落两份文字表而悄悄分叉。
+std::string ChargingText(int state);
 
 // BatteryStatus(0x1000) 状态码（与 UnifiedBattery 的状态码不同）。
 // 转成统一内部状态，便于历史与通知共用一套判断。
-inline int NormalizeBatteryStatus(int status) {
-    switch (status) {
-        case 0: return 0;  // discharging
-        case 1: return 1;  // recharging
-        case 2: return 1;  // almost full, still charging
-        case 3: return 3;  // full
-        case 4: return 2;  // slow recharge
-        case 5: case 6: return 4;  // invalid battery / thermal error
-        default: return 0xFF;
-    }
-}
+int NormalizeBatteryStatus(int status);
 
-inline std::string BatteryStatusText(int status) {
-    switch (status) {
-        case 0: return u8"放电中";
-        case 1: return u8"充电中";
-        case 2: return u8"充电中（接近充满）";
-        case 3: return u8"已充满";
-        case 4: return u8"充电中（慢充）";
-        case 5: return u8"电池异常";
-        case 6: return u8"温度异常";
-        default: return u8"未知电池状态";
-    }
-}
+std::string BatteryStatusText(int status);
 
-inline bool IsChargingState(int state) {
-    return state == 1 || state == 2;
-}
+bool IsChargingState(int state);
 
 // 电量档位位掩码（内核 FLAG_UNIFIED_BATTERY_LEVEL_*）
-inline std::string LevelFromFlags(int bits) {
-    if (bits & 0x08) return u8"满";
-    if (bits & 0x04) return u8"良好";
-    if (bits & 0x02) return u8"偏低";
-    if (bits & 0x01) return u8"极低";
-    return {};
-}
+std::string LevelFromFlags(int bits);
 
 // ---------------------------------------------------------------- 接口
 
@@ -136,6 +100,10 @@ std::vector<ReceiverInfo> FindReceivers();
 
 // 自检：验证协议层能否工作，打印诊断
 int RunSelfTest();
+
+// 诊断：列出每台在线设备实际实现了哪些电量特性，便于确认某个型号
+// 走的是哪条读取路径（0x1004 / 0x1000 / 0x1001 / 0x1F20 / 0x0104）。
+int ProbeFeatures();
 
 // ---------------------------------------------------------------- 帧构造
 //

@@ -2,6 +2,7 @@
 //  main.cpp — HID++ reader CLI used by the WPF application
 // ============================================================================
 
+#include "battery.h"
 #include "hidpp.h"
 #include "util.h"
 
@@ -13,10 +14,12 @@ void PrintUsage() {
     util::Print(
         u8"Logitech HID++ battery reader\n\n"
         u8"Usage:\n"
-        u8"  mouse-tray.exe [--once]    Read battery and print one snapshot\n"
-        u8"  mouse-tray.exe --test      Run HID++ protocol self-test\n"
-        u8"  mouse-tray.exe --dump-frames  Print protocol test frames\n"
-        u8"  mouse-tray.exe --help      Show this help\n");
+        u8"  mouse-tray.exe [--once]        Read battery and print one snapshot\n"
+        u8"  mouse-tray.exe --test          Run HID++ protocol self-test\n"
+        u8"  mouse-tray.exe --test-battery  Run offline battery-parse unit tests\n"
+        u8"  mouse-tray.exe --probe         List every battery feature each device exposes\n"
+        u8"  mouse-tray.exe --dump-frames   Print protocol test frames\n"
+        u8"  mouse-tray.exe --help          Show this help\n");
 }
 
 int RunOnce() {
@@ -31,6 +34,10 @@ int RunOnce() {
                     reading.percent, reading.chargingText.c_str());
         if (!reading.level.empty())
             util::Print(u8" · %s", reading.level.c_str());
+        // 百分比若是推算出来的（设备只报档位或只有电压），标注出来，
+        // 免得使用者以为这是设备直报的精确值。
+        if (reading.percentInferred)
+            util::Print(u8"（推算）");
         util::Print(u8"\n");
     }
     return 0;
@@ -50,6 +57,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::strcmp(argv[1], "--test") == 0)
         return hidpp::RunSelfTest();
+    if (argc == 2 && std::strcmp(argv[1], "--test-battery") == 0)
+        return battery::RunParseTests();
+    if (argc == 2 && std::strcmp(argv[1], "--probe") == 0)
+        return hidpp::ProbeFeatures();
     if (argc == 2 && std::strcmp(argv[1], "--dump-frames") == 0)
         return hidpp::DumpFrames();
 

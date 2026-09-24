@@ -42,4 +42,18 @@
     </Content>
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      原生 HID++ 读取程序。它由 native/ 单独编译，不属于本项目源码，
+      但运行时必须与主程序同目录，否则读不到电量（一直显示离线）。
+
+      此前这里没有引用它，输出目录里的 mouse-tray.exe 只是手工拷贝留下的
+      陈旧副本 —— 结果是重新编译 native 后，完整版仍然打包旧读取器，
+      协议层的修复不会生效。显式引用后由构建统一复制，与轻量版一致。
+    -->
+    <Content Include="..\native\build\mouse-tray.exe" Link="mouse-tray.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

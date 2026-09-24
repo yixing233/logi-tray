@@ -6,6 +6,7 @@
 // ============================================================================
 
 #include "hidpp.h"
+#include "battery.h"
 #include "util.h"
 
 #include <windows.h>
@@ -13,10 +14,13 @@
 #include <setupapi.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <mutex>
+#include <tuple>
 
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "setupapi.lib")
@@ -185,6 +189,18 @@ std::mutex g_cacheMutex;
 std::map<std::wstring, int> g_lastDeviceIndex;   // 上次成功读到的配对槽位
 std::map<std::wstring, std::string> g_nameCache;
 
+// feature 索引在一次会话内不会变（设备不会中途换特性表），
+// 缓存后可省掉每轮 1~2 次 HID 往返。键 = 路径 + 槽位 + 特性 ID。
+//
+// 只缓存"查到"的结果（index != 0）。查不到可能是设备正在休眠而非真的不支持，
+// 把失败也缓存下来会让设备永久被判定为不支持该特性。
+std::map<std::tuple<std::wstring, int, uint16_t>, int> g_featureCache;
+
+// 0x1004 的能力字节同样在一次会话内不变，缓存它可省掉每轮一次往返
+// （约 57ms）。同样只缓存成功读到的结果，失败不缓存。
+std::map<std::tuple<std::wstring, int, uint16_t>, std::array<uint8_t, 16>>
+    g_capsCache;
+
 class Receiver {
 public:
     Receiver() = default;
@@ -271,6 +287,53 @@ public:
                   out, sizeof(out), timeoutSec))
             return 0;
         return out[0];
+    }
+
+    // 带缓存的特性查找。命中缓存不消耗时间预算。
+    int CachedFeatureIndex(int deviceIndex, uint16_t featureId,
+                           double timeoutSec) {
+        const auto key = std::make_tuple(longPath_, deviceIndex, featureId);
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            auto it = g_featureCache.find(key);
+            if (it != g_featureCache.end()) return it->second;
+        }
+
+        const int index = FeatureIndex(deviceIndex, featureId, timeoutSec);
+        if (index != 0) {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            g_featureCache[key] = index;
+        }
+        return index;
+    }
+
+    // 读 0x1004 的能力字节（带缓存）。
+    // 能力字节决定 status[0] 是百分比还是无意义的占位值，必须拿到才能正确解析；
+    // 但它一次会话内不变，缓存后可省掉每轮一次 HID 往返（约 57ms）。
+    bool CachedCapabilities(int deviceIndex, int featureIndex,
+                            uint8_t* out, double timeoutSec) {
+        const auto key = std::make_tuple(
+            longPath_, deviceIndex, static_cast<uint16_t>(kFeatureUnifiedBattery));
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            auto it = g_capsCache.find(key);
+            if (it != g_capsCache.end()) {
+                std::memcpy(out, it->second.data(), it->second.size());
+                return true;
+            }
+        }
+
+        std::array<uint8_t, 16> buf{};
+        if (!Call(deviceIndex, featureIndex, kFnGetCapabilities, nullptr, 0,
+                  buf.data(), static_cast<int>(buf.size()), timeoutSec))
+            return false;
+
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            g_capsCache[key] = buf;
+        }
+        std::memcpy(out, buf.data(), buf.size());
+        return true;
     }
 
     std::string DeviceName(int deviceIndex, double timeoutSec) {
@@ -411,6 +474,14 @@ std::vector<ReceiverInfo> EnumerateInternal() {
 
 // ---------------------------------------------------------------- 公开接口
 
+// 以下四个包装把实现委托给 battery.cpp 的纯解析层。
+// 这样文字表与状态映射只有一处定义，且能被 --test-battery 覆盖。
+std::string ChargingText(int state) { return battery::ChargingText(state); }
+std::string BatteryStatusText(int status) { return battery::BatteryStatusText(status); }
+int NormalizeBatteryStatus(int status) { return battery::NormalizeBatteryStatus(status); }
+bool IsChargingState(int state) { return battery::IsChargingState(state); }
+std::string LevelFromFlags(int bits) { return battery::LevelFromFlags(bits); }
+
 std::vector<ReceiverInfo> FindReceivers() { return EnumerateInternal(); }
 
 std::vector<Reading> ReadAll(double budgetSec) {
@@ -464,47 +535,124 @@ std::vector<Reading> ReadAll(double budgetSec) {
 
                 if (!rx.IsPresent(deviceIndex, probe)) continue;
 
-                // 优先读取新版 UnifiedBattery；G304 等设备通常只实现
-                // BATTERY_STATUS(0x1000)，其函数号与 UnifiedBattery 不同。
-                int findex = rx.FeatureIndex(
-                    deviceIndex, kFeatureUnifiedBattery, left);
-                uint8_t status[16] = {0};
-                bool batteryStatusFeature = false;
-                bool gotBattery = findex != 0 &&
-                    rx.Call(deviceIndex, findex, kFnGetStatus,
-                            nullptr, 0, status, sizeof(status), left);
+                // ---- 依次尝试各条电量读取路径 ----
+                //
+                // 不同年代/系列的罗技设备实现的电量特性并不相同，因此这里
+                // 按「信息量优先」的顺序回退，任意一条成功即采纳：
+                //
+                //   0x1004 UNIFIED_BATTERY   首选。支持百分比或仅档位两种模式，
+                //                            需要先读 capabilities 才能判断。
+                //   0x1000 BATTERY_STATUS    老设备（G304 等）走这条。
+                //   0x0104 CENTURION_SOC     较新的 Centurion 系列。
+                //   0x1001 BATTERY_VOLTAGE   只有电压，需按放电曲线换算百分比。
+                //   0x1F20 ADC_MEASUREMENT   另一路电压测量。
+                //
+                // 每条路径都只花剩余预算的一小部分，保证后面还有机会尝试。
+                battery::Parsed parsed;
+                uint16_t usedFeature = 0;
 
-                if (!gotBattery) {
-                    const double remaining = deadline - NowSec();
-                    if (remaining <= 0) continue;
-                    findex = rx.FeatureIndex(
-                        deviceIndex, kFeatureBatteryStatus, remaining);
-                    if (findex == 0) continue;
+                // 单次调用允许占用的最大时间片：剩余预算的一半，
+                // 但要留出至少 60ms 给后续路径，避免第一条就把预算吃光。
+                auto slice = [&]() {
+                    const double left = deadline - NowSec();
+                    if (left <= 0) return 0.0;
+                    return std::max(0.05, std::min(left * 0.5, left - 0.02));
+                };
 
-                    const double requestBudget = deadline - NowSec();
-                    if (requestBudget <= 0 ||
-                        !rx.Call(deviceIndex, findex, kFnBatteryStatusGetStatus,
-                                 nullptr, 0, status, sizeof(status),
-                                 requestBudget))
-                        continue;
-                    batteryStatusFeature = true;
+                // 1) 0x1004 UnifiedBattery
+                {
+                    const int findex = rx.CachedFeatureIndex(
+                        deviceIndex, kFeatureUnifiedBattery, slice());
+                    if (findex != 0) {
+                        uint8_t caps[16] = {0};
+                        const bool haveCaps = rx.CachedCapabilities(
+                            deviceIndex, findex, caps, slice());
+
+                        uint8_t status[16] = {0};
+                        if (rx.Call(deviceIndex, findex, kFnGetStatus,
+                                    nullptr, 0, status, sizeof(status), slice())) {
+                            parsed = battery::ParseUnifiedBattery(
+                                status, static_cast<int>(sizeof(status)),
+                                haveCaps ? caps : nullptr,
+                                haveCaps ? static_cast<int>(sizeof(caps)) : 0);
+                            if (parsed.valid) usedFeature = kFeatureUnifiedBattery;
+                        }
+                    }
                 }
+
+                // 2) 0x1000 BatteryStatus（G304 等）
+                if (!parsed.valid) {
+                    const int findex = rx.CachedFeatureIndex(
+                        deviceIndex, kFeatureBatteryStatus, slice());
+                    if (findex != 0) {
+                        uint8_t status[16] = {0};
+                        if (rx.Call(deviceIndex, findex,
+                                    kFnBatteryStatusGetStatus, nullptr, 0,
+                                    status, sizeof(status), slice())) {
+                            parsed = battery::ParseBatteryStatus(
+                                status, static_cast<int>(sizeof(status)));
+                            if (parsed.valid) usedFeature = kFeatureBatteryStatus;
+                        }
+                    }
+                }
+
+                // 3) 0x0104 CenturionBatterySOC
+                if (!parsed.valid) {
+                    const int findex = rx.CachedFeatureIndex(
+                        deviceIndex, kFeatureCenturionSoc, slice());
+                    if (findex != 0) {
+                        uint8_t data[16] = {0};
+                        if (rx.Call(deviceIndex, findex, kFnGetCapabilities,
+                                    nullptr, 0, data, sizeof(data), slice())) {
+                            parsed = battery::ParseCenturionSoc(
+                                data, static_cast<int>(sizeof(data)));
+                            if (parsed.valid) usedFeature = kFeatureCenturionSoc;
+                        }
+                    }
+                }
+
+                // 4) 0x1001 BatteryVoltage
+                if (!parsed.valid) {
+                    const int findex = rx.CachedFeatureIndex(
+                        deviceIndex, kFeatureBatteryVoltage, slice());
+                    if (findex != 0) {
+                        uint8_t data[16] = {0};
+                        if (rx.Call(deviceIndex, findex, kFnGetCapabilities,
+                                    nullptr, 0, data, sizeof(data), slice())) {
+                            parsed = battery::ParseBatteryVoltage(
+                                data, static_cast<int>(sizeof(data)));
+                            if (parsed.valid) usedFeature = kFeatureBatteryVoltage;
+                        }
+                    }
+                }
+
+                // 5) 0x1F20 ADC_MEASUREMENT
+                if (!parsed.valid) {
+                    const int findex = rx.CachedFeatureIndex(
+                        deviceIndex, kFeatureAdcMeasurement, slice());
+                    if (findex != 0) {
+                        uint8_t data[16] = {0};
+                        if (rx.Call(deviceIndex, findex, kFnGetCapabilities,
+                                    nullptr, 0, data, sizeof(data), slice())) {
+                            parsed = battery::ParseAdcMeasurement(
+                                data, static_cast<int>(sizeof(data)));
+                            if (parsed.valid) usedFeature = kFeatureAdcMeasurement;
+                        }
+                    }
+                }
+
+                if (!parsed.valid) continue;
 
                 Reading r;
                 r.deviceIndex = deviceIndex;
-                // 两种 feature 的状态帧格式不同：BatteryStatus 返回
-                // [电量百分比, 下一档阈值, 电池状态]；第二字节不是 flags。
-                r.percent = std::max(0, std::min(100,
-                                     static_cast<int>(status[0])));
-                if (batteryStatusFeature) {
-                    r.chargingState = NormalizeBatteryStatus(status[2]);
-                    r.chargingText = BatteryStatusText(status[2]);
-                } else {
-                    r.level = LevelFromFlags(status[1]);
-                    r.chargingState = status[2];
-                    r.chargingText = ChargingText(status[2]);
-                    r.externalPower = status[3];
-                }
+                r.percent = std::max(0, std::min(100, parsed.percent));
+                r.level = parsed.level;
+                r.chargingState = parsed.chargingState;
+                r.chargingText = parsed.chargingText;
+                r.externalPower = parsed.externalPower;
+                r.voltageMv = parsed.voltageMv;
+                r.sourceFeature = usedFeature;
+                r.percentInferred = parsed.percentInferred;
 
                 // 设备名走缓存（一次要 1~3 次往返，约 180ms）
                 {
@@ -587,6 +735,64 @@ int DumpFrames() {
     return 0;
 }
 
+// ---------------------------------------------------------------- 特性探测
+
+int ProbeFeatures() {
+    util::Print(u8"\n=== 各设备实现电量特性的情况 ===\n");
+
+    const auto receivers = FindReceivers();
+    if (receivers.empty()) {
+        util::Print(u8"未找到罗技接收器 —— 请确认接收器已插好\n");
+        return 1;
+    }
+
+    const struct { uint16_t id; const char* label; } kFeatures[] = {
+        {kFeatureUnifiedBattery,  "0x1004 UnifiedBattery  "},
+        {kFeatureBatteryStatus,   "0x1000 BatteryStatus   "},
+        {kFeatureCenturionSoc,    "0x0104 CenturionSOC    "},
+        {kFeatureBatteryVoltage,  "0x1001 BatteryVoltage  "},
+        {kFeatureAdcMeasurement,  "0x1F20 AdcMeasurement  "},
+    };
+
+    bool sawAnything = false;
+
+    for (const auto& info : receivers) {
+        if (info.longPath.empty()) continue;
+
+        Receiver rx;
+        if (!rx.Open(info.longPath, info.shortPath)) continue;
+
+        util::Print(u8"\n接收器 VID_%04X:PID_%04X\n", info.vendorId,
+                    info.productId);
+
+        for (int deviceIndex = 1; deviceIndex <= 7; ++deviceIndex) {
+            if (!rx.IsPresent(deviceIndex, 0.25)) continue;
+
+            sawAnything = true;
+            std::string name = rx.DeviceName(deviceIndex, 0.6);
+            util::Print(u8"  槽位 %d: %s\n", deviceIndex,
+                        name.empty() ? u8"(未命名设备)" : name.c_str());
+
+            for (const auto& f : kFeatures) {
+                const int index = rx.FeatureIndex(deviceIndex, f.id, 0.4);
+                util::Print(u8"    %s %s\n", f.label,
+                            index != 0 ? u8"支持" : u8"—");
+            }
+        }
+
+        // 接收器自身（0xFF）在部分型号上也带电量信息
+        if (rx.IsPresent(0xFF, 0.25)) {
+            util::Print(u8"  接收器自身 (0xFF) 可访问\n");
+        }
+    }
+
+    if (!sawAnything) {
+        util::Print(u8"\n未发现已配对的设备 —— 鼠标可能正在休眠，动一下再试\n");
+        return 2;
+    }
+    return 0;
+}
+
 // ---------------------------------------------------------------- 自检
 
 int RunSelfTest() {
@@ -624,6 +830,9 @@ int RunSelfTest() {
             util::Print(u8"    档位: %s\n", r.level.c_str());
         if (r.voltageMv > 0)
             util::Print(u8"    电压: %d mV\n", r.voltageMv);
+        if (r.sourceFeature != 0)
+            util::Print(u8"    来源特性: 0x%04X%s\n", r.sourceFeature,
+                        r.percentInferred ? u8"（百分比为推算值）" : u8"");
     }
     util::Print(u8"  耗时 %.0f ms\n", dt * 1000);
     util::Print(u8"协议层自检通过 ✓\n");

@@ -62,7 +62,7 @@ if errorlevel 1 (
 )
 
 REM ---- Source files (added stage by stage)
-set "SOURCES=%SRC%\main.cpp %SRC%\hidpp.cpp %SRC%\util.cpp"
+set "SOURCES=%SRC%\main.cpp %SRC%\hidpp.cpp %SRC%\battery.cpp %SRC%\util.cpp"
 
 REM ---- Compiler flags
 REM   /utf-8   sources are UTF-8 (Chinese comments); without this MSVC
