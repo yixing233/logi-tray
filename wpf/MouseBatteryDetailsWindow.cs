@@ -210,6 +210,12 @@ public sealed class MouseBatteryDetailsWindow : Window
         Dispatcher.Invoke(() =>
         {
             ThemeService.ApplyAcrylicBackdrop(this);
+
+            // 必须重新注入画刷：SetResourceReference 是动态查找，若只重建控件树
+            // 而资源字典里仍是上一个主题的颜色，底部的动态绑定文字就会保持旧色
+            // （深色模式下表现为黑字）。
+            ThemeService.ApplyThemeResources(Resources);
+
             if (_cardBorder != null)
             {
                 _cardBorder.BorderBrush = ThemeService.BorderBrush;
