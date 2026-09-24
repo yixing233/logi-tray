@@ -142,38 +142,6 @@ multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件�
 [README](https://github.com/yixing233/logi-tray#readme) · GPL-3.0
 """
 
-### 命令行
-
-```bat
-multi-tray.exe --list             :: 列出检测到的设备与当前电量
-multi-tray.exe --probe-atk        :: 排查 ATK 设备（打印原始收发字节）
-multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件）
-```
-
-### 修复
-
-多品牌版开发过程中发现并修复了若干真实缺陷：
-
-- **同一设备重复条目**：原先按接口路径去重，导致一把键盘出现 3 条记录
-- **罗技设备整块消失**：判据误用用途页，读不到时应显示为离线而非不显示
-- **托盘图标数字过小**：在超采样画布上直接用了 16px 的字号
-- **CLI 中文乱码**：`WinExe` 下设置 `Console.OutputEncoding` 会**吞掉全部输出**，
-  已改为 `SetOut` 接管 stdout（用 5 种变体实测确认）
-- **HICON 泄漏**：每次刷新释放旧图标句柄
-- **回显被当成电量**：ATK 的请求回显可能被误读为「1%」，已加两道防线
-
-### 已知限制
-
-- **ATK Z87 读不到电量**：该型号对已知协议帧只回显不应答
-- ATK 各型号 Report ID 不统一（公开实现用 `0x08`，实测本机接口是 `0x5A`/`0xED`/`0xCC`）
-- 同一型号的多台设备会合并为一条显示
-- 多品牌版不含「关于」页与检查更新
-
----
-
-[README](https://github.com/yixing233/logi-tray#readme) · GPL-3.0
-"""
-
 status, rel = api("GET", f"/repos/{REPO}/releases/tags/{TAG}")
 if status == 200:
     print(f"release 已存在: {rel['html_url']}")
