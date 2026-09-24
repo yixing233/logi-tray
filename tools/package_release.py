@@ -98,19 +98,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$dirs = @('%APPDATA%\Microsoft\Windows\Start Menu\Programs', [Environment]::GetFolderPath('Desktop'));" ^
   "foreach ($d in $dirs) {{ $p = Join-Path $d '%LNK_NAME%'; $s = $ws.CreateShortcut($p); $s.TargetPath = '%TARGET_DIR%\{app}.exe'; $s.IconLocation = '%TARGET_DIR%\app.ico,0'; $s.WorkingDirectory = '%TARGET_DIR%'; $s.Description = '{title}'; $s.Save() }}"
 
-echo [5/6] 正在配置任务栏常驻显示...
+echo [5/6] 正在启动 {title}...
+start "" "%TARGET_DIR%\{app}.exe"
+
+REM ---------------------------------------------------------------
+REM  任务栏常驻显示：必须在程序**启动之后**再做。
+REM
+REM  Windows 是在程序首次注册托盘图标时才创建
+REM  HKCU\Control Panel\NotifyIconSettings 下对应的项。
+REM  首次安装时程序还没运行过，此时去设置 IsPromoted 找不到目标，
+REM  图标就会一直蜷在任务栏的折叠区里。
+REM  因此这里先启动程序，轮询等待注册表项出现，再置为常驻显示。
+REM ---------------------------------------------------------------
+echo.
+echo       正在配置任务栏常驻显示（等待托盘图标注册）...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$key = 'HKCU:\Control Panel\NotifyIconSettings';" ^
-  "if (Test-Path $key) {{" ^
-  "  Get-ChildItem $key | ForEach-Object {{" ^
+  "$deadline = (Get-Date).AddSeconds(25);" ^
+  "$done = $false;" ^
+  "while (-not $done -and (Get-Date) -lt $deadline) {{" ^
+  "  Start-Sleep -Milliseconds 500;" ^
+  "  if (-not (Test-Path $key)) {{ continue }}" ^
+  "  Get-ChildItem $key -ErrorAction SilentlyContinue | ForEach-Object {{" ^
   "    $v = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue;" ^
-  "    if ($v.ExecutablePath -like '*{app}.exe*') {{ Set-ItemProperty $_.PSPath -Name 'IsPromoted' -Value 1 -ErrorAction SilentlyContinue }}" ^
+  "    if ($v.ExecutablePath -like '*{app}.exe*') {{" ^
+  "      Set-ItemProperty $_.PSPath -Name 'IsPromoted' -Value 1 -ErrorAction SilentlyContinue;" ^
+  "      $script:done = $true" ^
+  "    }}" ^
   "  }}" ^
-  "}}"
-
-echo [6/6] 正在启动 {title}...
-start "" "%TARGET_DIR%\{app}.exe"
-timeout /t 2 >nul
+  "}};" ^
+  "if ($done) {{ Write-Host '      [OK] 已设为常驻显示' }} else {{ Write-Host '      [i] 未能自动设置，可从任务栏折叠区拖出图标' }}"
 
 echo.
 echo ======================================================
