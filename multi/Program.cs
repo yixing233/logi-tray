@@ -40,6 +40,8 @@ internal static class Program
                     return ProtocolTests.Run();
                 case "--list":
                     return ListDevices();
+                case "--probe-atk":
+                    return AtkProbe.Run();
                 case "--help":
                 case "-h":
                     PrintHelp();
@@ -64,6 +66,7 @@ internal static class Program
         Console.WriteLine("用法:");
         Console.WriteLine("  multi-tray.exe                启动托盘程序");
         Console.WriteLine("  multi-tray.exe --list         列出检测到的设备与当前电量后退出");
+        Console.WriteLine("  multi-tray.exe --probe-atk    排查 ATK 设备的读取通道（打印原始响应）");
         Console.WriteLine("  multi-tray.exe --test-protocols  运行协议解析层自检（无需硬件）");
         Console.WriteLine("  multi-tray.exe --help         显示本帮助");
     }

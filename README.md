@@ -144,24 +144,36 @@ WPF 的渲染栈在第一次显示窗口后就会常驻进程，这才是完整�
 
 ```bat
 multi-tray.exe --list             :: 列出检测到的设备与当前电量
+multi-tray.exe --probe-atk        :: 排查 ATK 设备（打印原始收发字节）
 multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件）
 ```
 
 > **关于读数可信度**：本工具**不会显示推算或猜测的电量**。读不到就显示 `--`。
 > 罗技设备若只能从档位或电压推算百分比，会明确标注「推算」。
 
-#### 已支持与待验证的型号
+#### 已支持与验证情况
 
-协议来自公开实现，**但开发机上三台设备对厂商私有帧均无应答**，因此只有罗技那条路径经过实机验证：
+协议来自公开实现。经**实机 6 轮连续读数**验证，结果如下：
 
-| 品牌 | 实现依据 | 实机验证情况 |
+| 品牌 | 实现依据 | 实机验证 |
 | --- | --- | --- |
-| 罗技 | 本仓库 native 读取器（HID++ 2.0，5 条特性回退） | ✅ 53 项合成帧单测 + 既有实机使用 |
-| 迈从 MCHOSE | [rafagfran/mchose-v9-pro-battery-tray](https://github.com/rafagfran/mchose-v9-pro-battery-tray)（同型号 VID/PID） | ⚠️ 已实现，但本机设备无应答，**未经实机读数验证** |
-| ATK / VXE / VGN | [Fan4Metal/ATK_tray](https://github.com/Fan4Metal/ATK_tray) 的协议 1/2 | ⚠️ 已实现，但本机设备无应答，**未经实机读数验证** |
+| 罗技 | 本仓库 native 读取器（HID++ 2.0，5 条特性回退） | ✅ 53 项单测 + 实机 **81%，6/6 稳定** |
+| 迈从 MCHOSE | [rafagfran/mchose-v9-pro-battery-tray](https://github.com/rafagfran/mchose-v9-pro-battery-tray)（同型号 VID/PID） | ✅ 实机 **40%，6/6 稳定** |
+| ATK / VXE / VGN | [Fan4Metal/ATK_tray](https://github.com/Fan4Metal/ATK_tray) 的协议 1/2 | ❌ 本机 Z87 **只回显不应答**，未读到 |
 
-若你的 ATK 键盘或迈从耳机显示离线，请运行 `multi-tray.exe --list` 并把输出反馈给作者——
-其中的「来源」列会指出程序尝试了哪条协议。
+**迈从耳机的协议已在真机上验证可用**；ATK Z87 查明是该型号走另一套指令——
+它对协议帧原样回显请求：
+
+```
+发送: 04 7D 72 02 00 01 07 01 00 00 ...
+收到: 04 7D 72 02 00 01 07 01 00 00 ...   ← 完全一致
+```
+
+> **回显防护是必要的**：回显里的 `[7]=0x01` 若不排除，会被误报成「**1%**」。
+> 程序有两道防线（响应头校验 + 回显比对），并有 9 项专门单测覆盖。
+
+若你的 ATK 键盘显示离线，运行 `multi-tray.exe --probe-atk`，
+它会打印每个接口的原始收发字节，便于进一步定位。
 
 ### 安装方式
 

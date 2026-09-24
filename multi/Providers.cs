@@ -418,6 +418,7 @@ public sealed class AtkProvider : IBatteryProvider
 
                 var resp = Hid.GetFeature(d.Path, rid, d.FeatureLength);
                 if (resp == null) continue;
+                if (LooksLikeEcho(set, resp)) continue;
 
                 if (Protocols.TryParseAtk1(resp, out int pct))
                 {
@@ -448,6 +449,12 @@ public sealed class AtkProvider : IBatteryProvider
                     var resp = Hid.WriteRead(d.Path, frame, d.InputLength, 700);
                     if (resp == null) continue;
 
+                    // 回显防护（实测本机 ATK Z87 会把请求原样回送）：
+                    // 若响应与请求逐字节相同，那是设备回显而非应答。
+                    // 不排除的话，请求里的电量字段会被当成读数 ——
+                    // 例如回显的 [7]=0x01 会被误报成「1%」。
+                    if (LooksLikeEcho(frame, resp)) continue;
+
                     if (Protocols.TryParseAtk2(resp, out int pct, out bool reliable)
                         && reliable)
                     {
@@ -470,6 +477,28 @@ public sealed class AtkProvider : IBatteryProvider
         var off = DeviceReading.Offline(name, GuessKind(name), "ATK");
         off.Key = key;
         return off;
+    }
+
+    /// <summary>
+    /// 判断响应是否只是把请求回显了回来。
+    ///
+    /// 实测本机 ATK Z87 键盘（VID 373B:PID 1012）对协议 2 的帧会原样回送：
+    /// 发 04 7D 72 02 00 01 07 01，收到 04 7D 72 02 00 01 07 01。
+    /// 这种回显不含任何设备信息，必须排除，否则会把请求里的字节当成电量。
+    /// 比较时忽略首字节（Report ID 可能被设备改写）。
+    /// </summary>
+    private static bool LooksLikeEcho(byte[] sent, byte[] received)
+    {
+        if (sent == null || received == null) return false;
+        int n = Math.Min(sent.Length, received.Length);
+        if (n <= 2) return false;
+
+        // 从第 1 字节起比较（跳过 Report ID）
+        for (int i = 1; i < n; i++)
+        {
+            if (sent[i] != received[i]) return false;
+        }
+        return true;
     }
 
     private static DeviceKind GuessKind(string name)

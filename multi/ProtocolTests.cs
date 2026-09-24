@@ -35,6 +35,7 @@ public static class ProtocolTests
         TestMchose();
         TestAtk1();
         TestAtk2();
+        TestEchoRejection();
         TestLevelText();
         TestNotifyDedup();
 
@@ -243,6 +244,68 @@ public static class ProtocolTests
         // 长度不足与 null
         Check("长度 7 应拒绝", !Protocols.TryParseAtk2(new byte[7], out _, out _));
         Check("null 应拒绝", !Protocols.TryParseAtk2(null, out _, out _));
+    }
+
+    // ───────────── 回显防护 ─────────────
+
+    /// <summary>
+    /// 实测本机 ATK Z87 键盘（373B:1012）会把请求帧**原样回送**：
+    ///     发送 04 7D 72 02 00 01 07 01 … → 收到 04 7D 72 02 00 01 07 01 …
+    /// 若不识别这种回显，请求里的字节会被当成电量
+    /// （回显的 [7]=0x01 会被误报成「1%」）。
+    /// 这里验证：回显被拒绝，而正常应答不被误伤。
+    /// </summary>
+    private static void TestEchoRejection()
+    {
+        Console.WriteLine("\n[回显防护]");
+
+        // 本机 ATK 的真实回显样本（无线帧）
+        var sent = Protocols.BuildAtk2Request(wired: false, reportId: 0x04);
+        var echo = (byte[])sent.Clone();
+        Check("回显应被识别", IsEcho(sent, echo));
+
+        // 关键：若不做回显判定，这个回显会被当成什么？
+        // 回显 [1]=0x7D 而协议2要求 [1]=0x72，因此响应头校验已经能挡住它 ——
+        // 这是第二道防线，值得单独确认。
+        var resp = Protocols.TryParseAtk2(echo, out int pct, out bool rel);
+        Check("回显不应被协议2接受", !resp);
+        Check("回显不应给出电量", pct == -1);
+        Check("回显不应标记为可靠", !rel);
+
+        // 首字节（Report ID）被设备改写时，仍应认出是回显
+        var echo2 = (byte[])sent.Clone();
+        echo2[0] = 0x00;
+        Check("Report ID 被改写仍应识别为回显", IsEcho(sent, echo2));
+
+        // 正常应答不应被误判为回显
+        var good = new byte[64];
+        good[1] = 0x72;
+        good[5] = 0x07;
+        good[7] = 55;
+        Check("正常应答不应被当成回显", !IsEcho(sent, good));
+
+        // 只有首字节不同、其余相同的短帧不应触发（长度不足 3 无法判定）
+        Check("过短帧不判定为回显", !IsEcho(new byte[] { 0x01, 0x02 },
+                                            new byte[] { 0x01, 0x02 }));
+
+        // 协议1 的回显：写 [1]=0x04 后读回同样的 0x04
+        var atk1 = Protocols.BuildAtk1Request(0x5A);
+        var atk1Echo = (byte[])atk1.Clone();
+        Check("协议1 回显应被识别", IsEcho(atk1, atk1Echo));
+        Check("协议1 全零回显不含电量",
+            !Protocols.TryParseAtk1(new byte[17], out _));
+    }
+
+    /// <summary>与 AtkProvider.LooksLikeEcho 相同的判定（忽略首字节）。</summary>
+    private static bool IsEcho(byte[] sent, byte[] received)
+    {
+        int n = Math.Min(sent.Length, received.Length);
+        if (n <= 2) return false;
+        for (int i = 1; i < n; i++)
+        {
+            if (sent[i] != received[i]) return false;
+        }
+        return true;
     }
 
     // ───────────── 档位文案 ─────────────
