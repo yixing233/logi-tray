@@ -416,9 +416,13 @@ public sealed class TrayIconManager : IDisposable
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = TextRenderingHint.AntiAlias;
 
-        // 1. 上半部大号粗体数字 (电量状态色，精准适配16px宽度防止折行挤字)
+        // 1. 上半部大号粗体数字 (电量状态色)
+        // 字号按位数分档，取「16px 宽度内确实放得下」的最大值（实测 DrawString 宽度）：
+        //   "100" @7.5px ≈ 15.8px 放得下；@8px 已 16.9px 会裁掉末位。
+        //   "82"  @10px  ≈ 15.2px 放得下；@10.5px 就已超宽。
+        //   "9"   @14px  ≈ 13.0px 宽、垂直 y=1..11 刚好不触顶；@16px 会顶到 y=0 被裁。
         string text = percent >= 0 ? percent.ToString() : "--";
-        float fontSize = text.Length >= 3 ? 7.0f : (text.Length == 2 ? 9.0f : 11.0f);
+        float fontSize = text.Length >= 3 ? 7.5f : (text.Length == 2 ? 10.0f : 14.0f);
         using var font = new GdiFont("Segoe UI", fontSize, GdiFontStyle.Bold, GraphicsUnit.Pixel);
 
         using var sf = new GdiStringFormat
@@ -428,7 +432,8 @@ public sealed class TrayIconManager : IDisposable
             FormatFlags = StringFormatFlags.NoWrap
         };
 
-        var textRect = new GdiRectangleF(0, 0, 16, 12.5f);
+        // 文字区尽量向上占满，底部 2px 留给电量比例横轨
+        var textRect = new GdiRectangleF(0, 0, 16, 13.5f);
         using (var textBrush = new GdiBrush(accentColor))
         {
             g.DrawString(text, font, textBrush, textRect, sf);
