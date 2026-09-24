@@ -106,6 +106,12 @@ internal static class Shot
             Console.WriteLine($"[card/{tag}] {path}  {bytes} bytes");
             bad += Check(texts, tag, new[] { "立即刷新", "关闭" });
             bad += CheckCardContent(texts, readings, tag);
+            bad += CheckAbsent(texts, tag, new[]
+            {
+                "来源",
+                "唤醒设备后点",
+                "低电量提醒",
+            });
             win.Close();
         }
         return bad;
@@ -262,6 +268,28 @@ internal static class Shot
         {
             FindCheckBoxes(VisualTreeHelper.GetChild(node, i), into);
         }
+    }
+
+    /// <summary>
+    /// 断言这些文案**不**出现在界面上。
+    ///
+    /// 用户明确要求移除卡片底部的说明与离线设备那行提示；
+    /// 只靠肉眼比对截图容易漏（先前就漏掉过空开关），因此固化成断言。
+    /// </summary>
+    private static int CheckAbsent(List<string> found, string tag, string[] forbidden)
+    {
+        int present = 0;
+        foreach (string f in forbidden)
+        {
+            if (found.Exists(t => t.Contains(f, StringComparison.Ordinal)))
+            {
+                Console.WriteLine($"  !! [{tag}] 仍有文案未移除: {f}");
+                present++;
+            }
+        }
+        Console.WriteLine(
+            $"  [{tag}] 应移除文案 {forbidden.Length - present}/{forbidden.Length} 已移除");
+        return present;
     }
 
     private static int Check(List<string> found, string tag, string[] required)

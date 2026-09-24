@@ -175,10 +175,8 @@ public sealed class DeviceCardWindow : Window
 
         _rootPanel.Children.Add(DeviceCardWidgets.CreateSeparator());
 
-        string hint = _settings.NotifyEnabled
-            ? $"低电量提醒：≤{_settings.LowThreshold}% 提醒，≤{_settings.CriticalThreshold}% 严重提醒"
-            : "低电量提醒已关闭";
-        _rootPanel.Children.Add(DeviceCardWidgets.CreateHint(hint, 0, 6));
+        // 底部不再显示「低电量提醒：≤20% …」这行说明（用户要求移除）；
+        // 阈值可在设置页查看。
 
         // 底部操作行：立即刷新 / 关闭
         var buttons = new Grid();
@@ -238,9 +236,11 @@ public sealed class DeviceCardWindow : Window
         });
         left.Children.Add(new TextBlock
         {
+            // 离线设备不显示「来源 · XXX」：来源是内部实现细节，
+            // 对用户没有意义（用户要求移除）。
             Text = r.IsOnline
                 ? $"电量等级 · {Protocols.LevelText(r.Percent)}"
-                : $"来源 · {r.Source}",
+                : "",
             FontSize = 10.5,
             FontWeight = FontWeights.Medium,
             Foreground = ThemeService.TechBlueBrush,
@@ -277,11 +277,8 @@ public sealed class DeviceCardWindow : Window
             _rootPanel.Children.Add(
                 DeviceCardWidgets.CreateAnimatedProgressBar(r.Percent, accent));
         }
-        else
-        {
-            _rootPanel.Children.Add(DeviceCardWidgets.CreateHint(
-                r.IsOnline ? "正在读取…" : "唤醒设备后点「立即刷新」重试", 2, 2));
-        }
+        // 读不到电量时不显示任何引导文案（用户要求移除），
+        // 电量那一栏的 "--%" 已经说明了状态。
 
         _renderedKeys.Add(r.Key);
     }
