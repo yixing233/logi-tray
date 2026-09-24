@@ -36,6 +36,9 @@ public sealed class MouseBatteryDetailsWindow : Window
     private readonly DispatcherTimer _outsideClickTimer;
     private readonly Action? _onOpenSettings;
     private BatterySnapshot? _lastSnapshot;
+
+    /// <summary>最近一次真正渲染到视觉树里的快照，用于避免重复重建。</summary>
+    private BatterySnapshot? _renderedSnapshot;
     private bool _wasPrimaryButtonDown;
     private bool _adjustingPosition;
 
@@ -231,6 +234,7 @@ public sealed class MouseBatteryDetailsWindow : Window
     public void UpdateData(BatterySnapshot snapshot)
     {
         _lastSnapshot = snapshot;
+        _renderedSnapshot = snapshot;
         _rootPanel.Children.Clear();
 
         Brush primary = ThemeService.PrimaryTextBrush;
@@ -755,7 +759,11 @@ public sealed class MouseBatteryDetailsWindow : Window
         else
         {
             ThemeService.ApplyAcrylicBackdrop(this);
-            if (_lastSnapshot != null)
+
+            // 注意：Program.ShowDetailsAt 在调用 ToggleNear 之前已经 UpdateData 过一次。
+            // 这里只在「快照比已渲染内容更新」时才重建，避免每次打开都把整棵视觉树
+            // （24 根柱子 + 全部文本 + 画刷）重复构建两遍。
+            if (_lastSnapshot != null && !ReferenceEquals(_renderedSnapshot, _lastSnapshot))
             {
                 UpdateData(_lastSnapshot);
             }

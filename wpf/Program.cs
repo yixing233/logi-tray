@@ -44,6 +44,8 @@ public static class Program
 
         void ShowDetailsAt(int anchorX, int anchorY)
         {
+            MemoryOptimizer.NotifyActivity();
+
             if (detailsWin == null)
             {
                 detailsWin = new MouseBatteryDetailsWindow(ShowSettings);
@@ -61,6 +63,8 @@ public static class Program
 
         void ShowSettings()
         {
+            MemoryOptimizer.NotifyActivity();
+
             if (settingsWin == null || !settingsWin.IsLoaded)
             {
                 settingsWin = new SettingsWindow(config, savedCfg =>
@@ -139,6 +143,7 @@ public static class Program
         app.Startup += (_, _) =>
         {
             batteryService.RefreshNow();
+            MemoryOptimizer.Start();
 
             if (showDetailsOnStart)
             {
