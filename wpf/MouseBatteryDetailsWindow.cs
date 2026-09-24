@@ -68,6 +68,20 @@ public sealed class MouseBatteryDetailsWindow : Window
             ResizeBorderThickness = new Thickness(0)
         });
 
+        // 加载 FluentStyles 并注入当前主题画刷。
+        // 卡片里部分文字用 SetResourceReference("ThemeTextSecondary") 动态绑定，
+        // 若不加载这些资源，WPF 会回退到默认黑色前景 —— 深色模式下就成了黑字。
+        try
+        {
+            Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("pack://application:,,,/logi-tray;component/FluentStyles.xaml", UriKind.Absolute)
+            });
+        }
+        catch { }
+
+        ThemeService.ApplyThemeResources(Resources);
+
         _rootPanel = new StackPanel
         {
             Margin = new Thickness(14, 10, 14, 12)
