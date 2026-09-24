@@ -16,8 +16,32 @@ internal sealed class DetailsForm : Form
     private const int CardWidth = 232;
     private const int SpacingAboveTaskbar = 8;
 
+    /// <summary>
+    /// 大号电量标签的宽度。
+    ///
+    /// 实测（Microsoft YaHei UI Bold）：
+    ///   "100%" 在 26pt 需 119px、24pt 108px、22pt 102px
+    ///   右侧状态列最宽的「充电中（慢充）」需 92px
+    /// 卡片 232px、左内边距 12、右内边距 14，可用 206px。
+    /// 取 106px 时右侧列还剩 232-118-14 = 100px，比所需的 92px 多 8px 余量，
+    /// 两列不会重叠，大号数字也能保持醒目。
+    /// </summary>
+    private const int PercentLabelWidth = 106;
+
+    /// <summary>大号电量标签的右边界，也是右侧状态列的起点。</summary>
+    private const int PercentLabelRight = 12 + PercentLabelWidth;
+
+    /// <summary>右侧状态列与卡片右边距之间的间隙。</summary>
+    private const int RightColumnRightPadding = 14;
+
     private readonly Font _titleFont = new("Microsoft YaHei UI", 11f, FontStyle.Bold);
-    private readonly Font _bigFont = new("Microsoft YaHei UI", 26f, FontStyle.Bold);
+
+    /// <summary>
+    /// 大号电量字号。实测 26pt 时 "100%" 宽 119px，与右侧状态列无法并存
+    /// （详见 PercentLabelWidth 的说明）。22pt 为 102px，可完整放入 106px 的标签。
+    /// </summary>
+    private readonly Font _bigFont = new("Microsoft YaHei UI", 22f, FontStyle.Bold);
+
     private readonly Font _labelFont = new("Microsoft YaHei UI", 8.5f);
     private readonly Font _valueFont = new("Microsoft YaHei UI", 9f, FontStyle.Bold);
     private readonly Font _tinyFont = new("Microsoft YaHei UI", 7.5f);
@@ -77,13 +101,16 @@ internal sealed class DetailsForm : Form
         _settingsButton.Click += (_, _) => _onOpenSettings();
 
         // ---- 大号电量 ----
+        // 注意右侧边界：状态/续航标签从 PercentLabelRight 开始，
+        // 两者绝不能重叠。Label 默认画不透明背景，重叠会把对方的文字盖掉，
+        // 表现为「已休眠」左边缺一竖这类裁切。
         _percentLabel = new Label
         {
             AutoSize = false,
             Font = _bigFont,
             Text = "--",
             Location = new Point(12, 38),
-            Size = new Size(120, 46),
+            Size = new Size(PercentLabelWidth, 46),
             TextAlign = ContentAlignment.MiddleLeft
         };
 
@@ -92,9 +119,13 @@ internal sealed class DetailsForm : Form
             AutoSize = false,
             Font = _valueFont,
             Text = "放电中",
-            Location = new Point(126, 44),
-            Size = new Size(CardWidth - 140, 18),
-            TextAlign = ContentAlignment.MiddleLeft
+            Location = new Point(PercentLabelRight, 44),
+            Size = new Size(CardWidth - PercentLabelRight - RightColumnRightPadding, 18),
+            TextAlign = ContentAlignment.MiddleLeft,
+            // 透明背景：Label 默认画不透明底色，一旦布局上发生重叠就会把
+            // 对方文字整段盖掉（表现为「已休眠」缺左竖这类裁切），
+            // 设为透明后即使重叠也只是文字叠字，不会静默丢字。
+            BackColor = Color.Transparent
         };
 
         _remainingLabel = new Label
@@ -102,9 +133,10 @@ internal sealed class DetailsForm : Form
             AutoSize = false,
             Font = _labelFont,
             Text = "",
-            Location = new Point(126, 63),
-            Size = new Size(CardWidth - 140, 18),
-            TextAlign = ContentAlignment.MiddleLeft
+            Location = new Point(PercentLabelRight, 63),
+            Size = new Size(CardWidth - PercentLabelRight - RightColumnRightPadding, 18),
+            TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = Color.Transparent
         };
 
         // ---- 分隔线 ----
