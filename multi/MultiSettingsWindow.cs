@@ -407,23 +407,18 @@ public sealed class MultiSettingsWindow : Window
         return tb;
     }
 
-    /// <summary>把同一分组的所有行装进一张卡片（整组共用一块背景）。</summary>
+    /// <summary>
+    /// 把同一分组的所有行装进一张卡片（整组共用一块背景）。
+    ///
+    /// 行与行之间**不画分隔线**：这里刻意留白分隔，视觉更干净
+    /// （用户明确要求去掉分割线）。
+    /// </summary>
     private static Border WrapGroupInCard(params UIElement[] rows)
     {
         var panel = new StackPanel();
-        for (int i = 0; i < rows.Length; i++)
+        foreach (var row in rows)
         {
-            if (i > 0)
-            {
-                var divider = new Border
-                {
-                    Height = 1,
-                    Margin = new Thickness(12, 0, 12, 0)
-                };
-                divider.SetResourceReference(Border.BackgroundProperty, "ThemeCardBorder");
-                panel.Children.Add(divider);
-            }
-            panel.Children.Add(rows[i]);
+            panel.Children.Add(row);
         }
 
         var border = new Border
