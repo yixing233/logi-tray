@@ -35,6 +35,7 @@ internal static class Shot
         {
             try
             {
+                failures += CheckBranding(outDir);
                 failures += ShotIcons(outDir);
                 failures += ShotSettings(outDir);
                 failures += ShotCard(outDir);
@@ -52,6 +53,57 @@ internal static class Shot
 
         app.Run();
         return failures == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 断言多品牌版与罗技版在品牌上确实区分开了。
+    ///
+    /// 依据：两版的 app.ico 必须是不同文件（多品牌版用的是三根电量条图标，
+    /// 不是罗技的「G」）。这条断言专门防回归 —— 早先多品牌版直接沿用了
+    /// 罗技图标，用户指出后才区分开，而这种事光靠看代码不容易发现。
+    /// </summary>
+    private static int CheckBranding(string outDir)
+    {
+        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        string mine = Path.Combine(baseDir, "app.ico");
+
+        // 自检宿主自己的输出目录里也会带一份（ProjectReference 传递过来）
+        if (!File.Exists(mine))
+        {
+            Console.WriteLine("  !! 找不到 multi-tray 的 app.ico");
+            return 1;
+        }
+
+        // 与源码树里的完整版图标比对：两者必须不同
+        string wpfIco = @"C:\code\chat-records\mouse-tray\wpf\app.ico";
+        if (!File.Exists(wpfIco))
+        {
+            Console.WriteLine("  [品牌] 跳过（找不到 wpf/app.ico 作对照）");
+            return 0;
+        }
+
+        string a = Convert.ToHexString(
+            System.Security.Cryptography.MD5.HashData(File.ReadAllBytes(mine)));
+        string b = Convert.ToHexString(
+            System.Security.Cryptography.MD5.HashData(File.ReadAllBytes(wpfIco)));
+
+        if (a == b)
+        {
+            Console.WriteLine("  !! 多品牌版与罗技版使用了同一个图标（品牌未区分）");
+            return 1;
+        }
+
+        // ICO 必须含多个尺寸，否则任务栏/Alt-Tab 会放大糊图
+        var bytes = File.ReadAllBytes(mine);
+        int count = bytes.Length >= 6 ? bytes[4] | (bytes[5] << 8) : 0;
+        if (count < 4)
+        {
+            Console.WriteLine($"  !! app.ico 只含 {count} 个尺寸，任务栏会显示模糊");
+            return 1;
+        }
+
+        Console.WriteLine($"  [品牌] 图标与罗技版不同，含 {count} 个尺寸");
+        return 0;
     }
 
     /// <summary>

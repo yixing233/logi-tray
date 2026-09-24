@@ -49,8 +49,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      多品牌版自己的图标（深色圆徽章 + 三根高低电量条 + 科技蓝），
+      刻意不同于完整版的罗技「G」图标，避免品牌混淆。
+      两者互为 Resource（编入程序集，供窗口图标）与 Content（复制到输出目录，
+      供「关于」页按磁盘路径读取，从而与程序集名无关）。
+    -->
     <Resource Include="app.ico" />
+    <Resource Include="app.png" />
     <Content Include="app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="app.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
@@ -58,15 +68,6 @@
   <ItemGroup>
     <!-- Lucide 图标字体：直接引用完整版那份，避免重复 858KB -->
     <Content Include="..\wpf\Fonts\lucide.ttf" Link="Fonts\lucide.ttf">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-
-    <!--
-      「关于」页顶部的大图标。同样直接引用完整版那份，不复制。
-      必须以 Content 复制到输出目录：关于页优先按磁盘路径读取，
-      这样与程序集名无关；缺了它图标位置会是一片空白。
-    -->
-    <Content Include="..\wpf\app.png" Link="app.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
