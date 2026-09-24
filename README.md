@@ -12,12 +12,16 @@
   <a href="https://github.com/yixing233/logi-tray/releases/latest"><img src="https://img.shields.io/github/v/release/yixing233/logi-tray?style=flat-square&color=0078D4" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/.NET-8.0%20WPF-512BD4?style=flat-square" alt=".NET 8">
+  <img src="https://img.shields.io/badge/.NET-8.0%20WPF%20%2B%20WinForms-512BD4?style=flat-square" alt=".NET 8">
   <img src="https://img.shields.io/badge/C%2B%2B-HID%2B%2B%202.0-00599C?style=flat-square" alt="C++">
 </p>
 
 <p align="center">
   无需安装笨重缓慢的 Logitech G HUB，直接在 Windows 任务栏实时掌控鼠标真实电量、放电速率、续航时间与 24 小时电量轨迹。
+</p>
+
+<p align="center">
+  提供<b>完整版</b>（亚克力毛玻璃 + 三种图标样式）与<b>轻量版</b>（低占用，纯数字图标）两个版本。
 </p>
 
 ---
@@ -57,21 +61,29 @@
 
 ## 📸 界面预览
 
-### 电量详情卡片（真实 DWM 亚克力毛玻璃）
+### 完整版 · 电量详情卡片（真实 DWM 亚克力毛玻璃）
 
 | 浅色模式 | 深色模式 |
 | :---: | :---: |
 | <img src="assets/card_light.png" width="300" /> | <img src="assets/card_dark.png" width="300" /> |
 
-### 现代 Fluent 设置中心
+### 完整版 · 现代 Fluent 设置中心
 
 | 浅色模式 | 深色模式 |
 | :---: | :---: |
 | <img src="assets/settings_light.png" width="340" /> | <img src="assets/settings_dark.png" width="340" /> |
 
-### 三种任务栏托盘图标样式
+### 完整版 · 三种任务栏托盘图标样式
 
 <img src="assets/tray_styles.png" width="240" />
+
+### 轻量版 · 详情卡片与设置
+
+界面为朴素风格、不含亚克力，但功能完整，占用显著更低。
+
+| 电量详情卡片 | 设置 |
+| :---: | :---: |
+| <img src="assets/lite_card_light.png" width="240" /> | <img src="assets/lite_settings_light.png" width="340" /> |
 
 ---
 
@@ -89,19 +101,42 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 
 ### 下载应用本体
 
-前往 **[Releases 最新发布页面](https://github.com/yixing233/logi-tray/releases/latest)** 下载：
+前往 **[Releases 最新发布页面](https://github.com/yixing233/logi-tray/releases/latest)** 下载。提供**两个版本**，按需选择：
 
-- 文件名：`logi-tray-v1.0.1.zip`（约 1.5 MB）
-- 内含 WPF 主程序、C++ 原生 HID++ 探测引擎、Lucide 矢量图标字体与全部自动化脚本。
+| 版本 | 文件 | 内存占用（开窗口） | 适合 |
+| --- | --- | --- | --- |
+| **完整版** | `logi-tray-v1.0.1.zip`（约 1.6 MB） | 工作集约 141 MB / 提交约 70 MB | 想要亚克力毛玻璃、三种图标样式与主题切换 |
+| **轻量版** | `logi-tray-lite-v1.0.0.zip`（约 1.0 MB） | 工作集约 57 MB / 提交约 13 MB | 只要电量数字，希望占用尽可能低 |
+
+两者**共用同一套核心逻辑与配色**，电量读数、阈值判断、历史记录与续航预测完全一致；差别只在界面实现。
+
+> **两个版本可以同时安装、同时运行**，配置与历史数据分别存放在
+> `%LOCALAPPDATA%\logi-tray` 与 `%LOCALAPPDATA%\logi-tray-lite`，互不干扰。
+
+#### 版本差异
+
+| 功能 | 完整版 | 轻量版 |
+| --- | :---: | :---: |
+| 亚克力毛玻璃背景 | ✅ | ❌ 纯色底板 |
+| 托盘图标样式 | 电池 / 环形 / 数字 | 仅数字 |
+| 外观主题切换 | ✅ 跟随系统 / 浅色 / 深色 | 自动跟随系统 |
+| 详情卡片（电量 + 续航 + 24h 图表） | ✅ | ✅ |
+| 电量阈值与桌面通知 | ✅ | ✅ |
+| 开机自启开关 | ✅ | ✅ |
+| 后台刷新间隔 | ✅ | ✅ |
+| 关于页与检查更新 | ✅ | ✅ |
+
+轻量版之所以省内存，是因为它**不加载 WPF 渲染栈**（纯 WinForms 实现），而不是把特效关掉——
+WPF 的渲染栈在第一次显示窗口后就会常驻进程，这才是完整版内存占用的主要来源。
 
 ### 安装方式
 
-解压后，包内已附带全自动脚本：
+解压后，包内已附带全自动脚本（两个版本各自独立，装哪个就运行哪个包里的脚本）：
 
-- **`一键安装.bat`**：自动检测 .NET 8 运行时 → 部署至 `%LOCALAPPDATA%\Programs\logi-tray` → 创建开始菜单与桌面快捷方式 → 配置任务栏托盘常驻可见 → 立即启动（**全程无需管理员 UAC 提权**）；
+- **`一键安装.bat`**：自动检测 .NET 8 运行时 → 部署至 `%LOCALAPPDATA%\Programs\logi-tray`（轻量版为 `...\logi-tray-lite`）→ 创建开始菜单与桌面快捷方式 → 配置任务栏托盘常驻可见 → 立即启动（**全程无需管理员 UAC 提权**）；
 - **`卸载.bat`**：一键干净清除进程、自启项、快捷方式、程序文件与托盘注册记录。
 
-> 也可以直接双击 `logi-tray.exe` 绿色便携运行，不写入任何系统位置。
+> 也可以直接双击 `logi-tray.exe`（轻量版为 `logi-tray-lite.exe`）绿色便携运行，不写入任何系统位置。
 >
 > **开机自启**：安装后打开设置中心，直接拨动「开机自动启动」开关即可，无需额外脚本。
 
@@ -134,15 +169,31 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 - [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 - Visual Studio 2022 或 C++ 编译器（MSVC / Clang）
 
-### 编译前端 WPF 界面
+### 编译两个界面版本
+
 ```powershell
 # 克隆仓库
 git clone https://github.com/yixing233/logi-tray.git
 cd logi-tray
 
-# 编译主程序 (生成至 wpf/bin/Release/net8.0-windows/)
+# 完整版（WPF，生成至 wpf/bin/Release/net8.0-windows/）
 dotnet build wpf/MouseBatteryTray.csproj -c Release
+
+# 轻量版（WinForms，生成至 lite/bin/Release/net8.0-windows/）
+dotnet build lite/LogiTrayLite.csproj -c Release
 ```
+
+### 项目结构
+
+```
+shared/    两个版本共用的核心逻辑（电量轮询、HID 调用、配置、自启、配色）
+wpf/       完整版界面（WPF + 亚克力）
+lite/      轻量版界面（WinForms）
+native/    C++ HID++ 2.0 原生读取程序
+```
+
+两个版本通过 `Compile Include="..\shared\*.cs"` 编译**同一份**核心源码，
+核心逻辑与配色只有一处定义，不会出现两个版本行为不一致的问题。
 
 ### 编译原生 HID++ reader
 ```bat
@@ -150,7 +201,17 @@ cd native
 build.bat
 ```
 
-生成的 `native/build/mouse-tray.exe` 由 WPF 主程序调用，用于读取罗技设备电量。
+生成的 `native/build/mouse-tray.exe` 由两个版本共用；构建时会自动复制到各自的输出目录
+（缺少它程序会一直显示「设备离线或休眠」）。
+
+### 打包发布
+
+```powershell
+python package_release.py
+```
+
+会依次构建两个版本，并分别在 `release/` 下生成 `logi-tray-vX.Y.Z.zip` 与
+`logi-tray-lite-vX.Y.Z.zip`，各自附带独立的 `一键安装.bat` / `卸载.bat` / `使用说明.txt`。
 
 ---
 

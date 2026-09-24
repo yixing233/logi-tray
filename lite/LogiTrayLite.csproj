@@ -26,14 +26,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!--
-      允许测试宿主访问 internal 类型，用于在无实机鼠标时注入合成快照渲染界面，
-      从而验证详情卡片与柱状图的布局（Release 构建同样保留，便于随时自检）。
-    -->
-    <InternalsVisibleTo Include="liteshot" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Resource Include="app.ico" />
     <Content Include="app.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
