@@ -42,6 +42,15 @@ internal static class Program
                     return ListDevices();
                 case "--probe-atk":
                     return AtkProbe.Run();
+                case "--probe-atk-web":
+                    return AtkWebProbe.Run();
+                case "--probe-z87":
+                    return AtkZ87.Run();
+                // 下面两个用于核对界面（平时不需要）：直接打开窗口便于截图检查
+                case "--show-details":
+                    return ShowDetailsOnce();
+                case "--show-settings":
+                    return ShowSettingsOnce();
                 case "--help":
                 case "-h":
                     PrintHelp();
@@ -56,6 +65,33 @@ internal static class Program
         if (!created) return 0;
 
         Application.Run(new TrayContext());
+        return 0;
+    }
+
+    /// <summary>直接打开设备列表窗口（供界面核对/截图使用）。</summary>
+    private static int ShowDetailsOnce()
+    {
+        ApplicationConfiguration.Initialize();
+        var settings = MultiSettings.Load();
+        var readings = DeviceReader.ReadAll(settings);
+        bool dark = settings.ThemeMode switch
+        {
+            "dark" => true,
+            "light" => false,
+            _ => AppPalette.IsSystemDark(),
+        };
+        using var form = new DetailsForm(readings, dark, settings);
+        form.ShowDialog();
+        return 0;
+    }
+
+    /// <summary>直接打开设置窗口（供界面核对/截图使用）。</summary>
+    private static int ShowSettingsOnce()
+    {
+        ApplicationConfiguration.Initialize();
+        var settings = MultiSettings.Load();
+        using var form = new SettingsForm(settings);
+        form.ShowDialog();
         return 0;
     }
 

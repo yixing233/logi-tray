@@ -223,7 +223,10 @@ internal sealed class SettingsForm : Form
         y += intervalCard.Height + 10;
 
         // ── 分组：数据来源（可关闭以排查不兼容的型号）──
-        var sourceCard = NewCard(126);
+        // 高度按内容算：标题(8+约18) + 三个复选框(34/60/86，各 26 间距)
+        // + 注释(112+2，高 16) + 底部内边距 10 = 140。
+        // 原先写 126，注释底部（130）被裁掉一截 —— 截图核对时才发现。
+        var sourceCard = NewCard(140);
         sourceCard.Location = new Point(12, y);
         sourceCard.Controls.Add(NewGroupLabel("启用的设备来源", 10, 8));
 
