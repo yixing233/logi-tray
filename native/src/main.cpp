@@ -15,6 +15,7 @@ void PrintUsage() {
         u8"Logitech HID++ battery reader\n\n"
         u8"Usage:\n"
         u8"  mouse-tray.exe [--once]        Read battery and print one snapshot\n"
+        u8"  mouse-tray.exe --all           Like --once but lists every device on a receiver\n"
         u8"  mouse-tray.exe --test          Run HID++ protocol self-test\n"
         u8"  mouse-tray.exe --test-battery  Run offline battery-parse unit tests\n"
         u8"  mouse-tray.exe --probe         List every battery feature each device exposes\n"
@@ -22,8 +23,11 @@ void PrintUsage() {
         u8"  mouse-tray.exe --help          Show this help\n");
 }
 
-int RunOnce() {
-    const auto readings = hidpp::ReadAll(2.0);
+int RunOnce(bool allDevices = false) {
+    // 默认只读每个接收器上的第一台设备：应用以 --once 每轮新起进程，
+    // 槽位发现缓存无法保留，继续扫空槽位会平白增加每次轮询的耗时。
+    // --all 用于枚举同一接收器上的多台设备。
+    const auto readings = hidpp::ReadAll(2.0, allDevices);
     if (readings.empty()) {
         util::Print(u8"未读到电量（鼠标可能正在休眠，动一下再试）\n");
         return 2;
@@ -61,6 +65,8 @@ int main(int argc, char** argv) {
         return battery::RunParseTests();
     if (argc == 2 && std::strcmp(argv[1], "--probe") == 0)
         return hidpp::ProbeFeatures();
+    if (argc == 2 && std::strcmp(argv[1], "--all") == 0)
+        return RunOnce(/*allDevices=*/true);
     if (argc == 2 && std::strcmp(argv[1], "--dump-frames") == 0)
         return hidpp::DumpFrames();
 

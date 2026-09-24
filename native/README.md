@@ -37,6 +37,7 @@ stale copy, which meant rebuilt readers did not reach the shipped package.
 
 ```bat
 build\mouse-tray.exe --once         :: read one battery snapshot
+build\mouse-tray.exe --all          :: like --once, but list every device on a receiver
 build\mouse-tray.exe --test         :: run HID++ protocol self-test
 build\mouse-tray.exe --test-battery :: run offline battery-parse unit tests
 build\mouse-tray.exe --probe        :: list the battery features each device exposes
@@ -45,6 +46,13 @@ build\mouse-tray.exe --help         :: show command usage
 ```
 
 Running the executable with no arguments is equivalent to `--once`.
+
+`--once` (the path the app polls with) stops at the first device on each receiver.
+The app spawns a **fresh process every poll**, so slot-discovery state cannot carry
+across polls; scanning the remaining slots would add roughly 0.7 s of empty-slot
+probe timeouts per poll for the common single-device case, and the app only uses
+the first device's reading anyway. Measured `--once` time is unchanged.
+`--all` and `--probe` do enumerate every slot.
 
 `--test-battery` needs no hardware and covers all five features, both `0x1004`
 reporting modes, level masking, charge stages, voltage interpolation boundaries,

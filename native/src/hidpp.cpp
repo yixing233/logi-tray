@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -187,7 +188,30 @@ private:
 // 并挤占"唤醒期重试"所需的时间预算。
 std::mutex g_cacheMutex;
 std::map<std::wstring, int> g_lastDeviceIndex;   // 上次成功读到的配对槽位
-std::map<std::wstring, std::string> g_nameCache;
+
+// 设备名缓存按「路径 + 槽位」索引。
+// 只按路径索引是错的：一个 Unifying 接收器可以同时带多台设备，
+// 那样第二台设备会显示成第一台的名字。
+std::map<std::pair<std::wstring, int>, std::string> g_nameCache;
+
+// 已知在线的配对槽位（按接收器路径）。
+//
+// 一个接收器可以同时带多台设备，但探测空槽位必须等超时（实测约 300ms），
+// 每轮都扫满 7 个槽位会白白吃掉整个时间预算，让单设备用户的读数变慢。
+// 因此记住「哪些槽位确实有设备」，之后只扫这些槽位，
+// 并在预算充裕时额外探测一个未知槽位以发现新设备。
+std::map<std::wstring, std::vector<int>> g_presentSlots;
+
+// 已确认没有设备的槽位，避免反复探测。
+std::map<std::wstring, std::vector<int>> g_absentSlots;
+
+// 每隔多少轮做一次全量槽位发现，以便发现新配对的设备。
+// 取值权衡：太频繁会反复为空槽位付超时代价；太大则新设备要等较久才被看到。
+constexpr int kRediscoverEvery = 20;
+
+// ReadAll 调用计数，用于决定本轮是否做全量发现。
+std::atomic<int> g_pollCounter{0};
+
 
 // feature 索引在一次会话内不会变（设备不会中途换特性表），
 // 缓存后可省掉每轮 1~2 次 HID 往返。键 = 路径 + 槽位 + 特性 ID。
@@ -484,10 +508,12 @@ std::string LevelFromFlags(int bits) { return battery::LevelFromFlags(bits); }
 
 std::vector<ReceiverInfo> FindReceivers() { return EnumerateInternal(); }
 
-std::vector<Reading> ReadAll(double budgetSec) {
+std::vector<Reading> ReadAll(double budgetSec, bool scanAllDevices) {
     std::vector<Reading> readings;
     const double deadline = NowSec() + std::max(0.2, budgetSec);
     const auto receivers = EnumerateInternal();
+
+    g_pollCounter.fetch_add(1);
 
     for (const auto& info : receivers) {
         if (NowSec() >= deadline) break;
@@ -515,8 +541,44 @@ std::vector<Reading> ReadAll(double budgetSec) {
 
         std::vector<int> order;
         order.push_back(preferred);
-        for (int i = 1; i <= 7; ++i)
-            if (i != preferred) order.push_back(i);
+
+        // 槽位发现结果缓存在 g_presentSlots / g_absentSlots 里。
+        //
+        // 为什么要缓存：探测一个不存在的槽位必须等到超时（实测约 120~300ms），
+        // 每轮扫满 7 个槽位会给"只有一个鼠标"的常见情形平白增加近 1 秒开销。
+        // 因此首次做全量发现，之后只扫已知在线的槽位；每 kRediscoverEvery
+        // 轮再做一次全量发现，以便发现新配对的设备。
+        const bool rediscover = (g_pollCounter % kRediscoverEvery) == 0;
+
+        std::vector<int> knownPresent;
+        std::vector<int> knownAbsent;
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            auto it = g_presentSlots.find(info.longPath);
+            if (it != g_presentSlots.end()) knownPresent = it->second;
+            auto it2 = g_absentSlots.find(info.longPath);
+            if (it2 != g_absentSlots.end()) knownAbsent = it2->second;
+        }
+
+        auto isKnownAbsent = [&](int slot) {
+            return std::find(knownAbsent.begin(), knownAbsent.end(), slot) !=
+                   knownAbsent.end();
+        };
+        auto isKnownPresent = [&](int slot) {
+            return std::find(knownPresent.begin(), knownPresent.end(), slot) !=
+                   knownPresent.end();
+        };
+
+        // 已知在线的槽位优先（多设备情形下能一次扫全）
+        for (int slot : knownPresent) {
+            if (slot != preferred) order.push_back(slot);
+        }
+        // 其余槽位：非重发现轮次跳过已确认空的槽位
+        for (int i = 1; i <= 7; ++i) {
+            if (i == preferred || isKnownPresent(i)) continue;
+            if (!rediscover && isKnownAbsent(i)) continue;
+            order.push_back(i);
+        }
 
         for (int deviceIndex : order) {
             if (NowSec() >= deadline) break;
@@ -533,7 +595,27 @@ std::vector<Reading> ReadAll(double budgetSec) {
                                               left / (attempts - attempt)))
                     : std::max(0.05, std::min(kProbeTimeoutSec, left / 8));
 
-                if (!rx.IsPresent(deviceIndex, probe)) continue;
+                if (!rx.IsPresent(deviceIndex, probe)) {
+                    // 用掉两次机会都没应答才判定为空槽位，避免把"唤醒中
+                    // 第一次超时"误记成没有设备（那会让设备再也扫不到）。
+                    if (attempt + 1 >= attempts) {
+                        std::lock_guard<std::mutex> lock(g_cacheMutex);
+                        auto& absent = g_absentSlots[info.longPath];
+                        if (std::find(absent.begin(), absent.end(),
+                                      deviceIndex) == absent.end()) {
+                            absent.push_back(deviceIndex);
+                        }
+                    }
+                    continue;
+                }
+
+                // 该槽位确认在线：从"空"名单里移除，并记入在线名单
+                {
+                    std::lock_guard<std::mutex> lock(g_cacheMutex);
+                    auto& absent = g_absentSlots[info.longPath];
+                    absent.erase(std::remove(absent.begin(), absent.end(),
+                                             deviceIndex), absent.end());
+                }
 
                 // ---- 依次尝试各条电量读取路径 ----
                 //
@@ -654,17 +736,20 @@ std::vector<Reading> ReadAll(double budgetSec) {
                 r.sourceFeature = usedFeature;
                 r.percentInferred = parsed.percentInferred;
 
-                // 设备名走缓存（一次要 1~3 次往返，约 180ms）
+                // 设备名走缓存（一次要 1~3 次往返，约 180ms）。
+                // 键含槽位：一个接收器可带多台设备，只按路径缓存会串名。
+                const auto nameKey =
+                    std::make_pair(info.longPath, deviceIndex);
                 {
                     std::lock_guard<std::mutex> lock(g_cacheMutex);
-                    auto it = g_nameCache.find(info.longPath);
+                    auto it = g_nameCache.find(nameKey);
                     if (it != g_nameCache.end()) r.name = it->second;
                 }
                 if (r.name.empty()) {
                     r.name = rx.DeviceName(deviceIndex, left);
                     if (!r.name.empty()) {
                         std::lock_guard<std::mutex> lock(g_cacheMutex);
-                        g_nameCache[info.longPath] = r.name;
+                        g_nameCache[nameKey] = r.name;
                     }
                 }
                 if (r.name.empty()) {
@@ -677,10 +762,30 @@ std::vector<Reading> ReadAll(double budgetSec) {
                 {
                     std::lock_guard<std::mutex> lock(g_cacheMutex);
                     g_lastDeviceIndex[info.longPath] = deviceIndex;
+
+                    // 记下这个槽位确实有设备，后续轮次可优先扫描
+                    auto& present = g_presentSlots[info.longPath];
+                    if (std::find(present.begin(), present.end(), deviceIndex) ==
+                        present.end()) {
+                        present.push_back(deviceIndex);
+                    }
                 }
                 got = true;
             }
-            if (got) break;   // 一个接收器通常只带一个鼠标
+
+            // 找到一台设备后是否继续扫其余槽位。
+            //
+            // 应用轮询走 --once（每轮新进程），缓存无法跨轮次保留，
+            // 继续扫空槽位只会白白增加每次轮询的耗时，因此默认不再继续。
+            // --probe / --all 传 scanAllDevices=true 以枚举同一接收器上的多台设备。
+            if (got && !scanAllDevices) {
+                break;
+            }
+
+            if (got) {
+                const double left = deadline - NowSec();
+                if (left < 0.20) break;
+            }
         }
     }
 
@@ -746,12 +851,16 @@ int ProbeFeatures() {
         return 1;
     }
 
+    // 一个接收器可带多台设备，因此这里枚举所有槽位并同时验证读取路径，
+    // 明确报告每台设备实际走的是哪条电量特性。
+    const auto readings = ReadAll(6.0, /*scanAllDevices=*/true);
+
     const struct { uint16_t id; const char* label; } kFeatures[] = {
-        {kFeatureUnifiedBattery,  "0x1004 UnifiedBattery  "},
-        {kFeatureBatteryStatus,   "0x1000 BatteryStatus   "},
-        {kFeatureCenturionSoc,    "0x0104 CenturionSOC    "},
-        {kFeatureBatteryVoltage,  "0x1001 BatteryVoltage  "},
-        {kFeatureAdcMeasurement,  "0x1F20 AdcMeasurement  "},
+        {kFeatureUnifiedBattery,  "0x1004 UnifiedBattery"},
+        {kFeatureBatteryStatus,   "0x1000 BatteryStatus "},
+        {kFeatureCenturionSoc,    "0x0104 CenturionSOC  "},
+        {kFeatureBatteryVoltage,  "0x1001 BatteryVoltage"},
+        {kFeatureAdcMeasurement,  "0x1F20 AdcMeasurement"},
     };
 
     bool sawAnything = false;
@@ -780,9 +889,21 @@ int ProbeFeatures() {
             }
         }
 
-        // 接收器自身（0xFF）在部分型号上也带电量信息
         if (rx.IsPresent(0xFF, 0.25)) {
             util::Print(u8"  接收器自身 (0xFF) 可访问\n");
+        }
+    }
+
+    if (!readings.empty()) {
+        util::Print(u8"\n实际读取结果（每台设备走的路径）:\n");
+        for (const auto& r : readings) {
+            util::Print(u8"  %s: %d%%%s · %s · 来源 0x%04X", r.name.c_str(),
+                        r.percent, r.percentInferred ? u8"（推算）" : u8"",
+                        r.chargingText.c_str(), r.sourceFeature);
+            if (r.voltageMv > 0) {
+                util::Print(u8" · %d mV", r.voltageMv);
+            }
+            util::Print(u8"\n");
         }
     }
 

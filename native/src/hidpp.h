@@ -87,7 +87,17 @@ std::string LevelFromFlags(int bits);
 // 读一次当前所有在线罗技鼠标的电量。
 // budgetSec 是**整个函数**的时间预算，不是每次 HID 往返的预算。
 // 鼠标休眠时返回空列表（这是正常状态，不是错误）。
-std::vector<Reading> ReadAll(double budgetSec = kDefaultBudgetSec);
+//
+// scanAllDevices = false（默认）时，每个接收器找到第一台设备就停止 ——
+// 这是应用轮询走的路径。原因：应用以 `--once` **每轮新起一个进程**，
+// 槽位发现缓存无法跨轮次保留，因此继续探测其余槽位只会在"只有一个鼠标"
+// 的常见情形下白白多花约 0.7 秒（每个空槽位都要等到超时），
+// 而应用本身只取第一台设备的读数。
+//
+// scanAllDevices = true 时扫完所有槽位，报告同一接收器上的多台设备，
+// 供 --probe / --all 与诊断使用。
+std::vector<Reading> ReadAll(double budgetSec = kDefaultBudgetSec,
+                             bool scanAllDevices = false);
 
 // 供自检使用：列出找到的接收器
 struct ReceiverInfo {
