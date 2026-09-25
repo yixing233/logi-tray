@@ -34,6 +34,7 @@ __pycache__/
 
 # ---- multishot 离屏自检渲染出的截图（每次运行重新生成）----
 /card/
+/all/
 
 # ---- ATK 抓包取证（本地一次性材料，含厂商驱动 bundle，不入库）----
 #   tools/capture_atk_hid.py 是抓包脚本本身，值得保留；
