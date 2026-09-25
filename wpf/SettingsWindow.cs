@@ -952,6 +952,13 @@ public sealed class SettingsWindow : Window
 
             string current = AppVersion();
 
+            // 资产列表没取到（网络抖动）不能说「已是最新」——那是撒谎
+            if (!lookup.AssetsResolved)
+            {
+                status.Text = "未能获取版本信息，请稍后重试";
+                return;
+            }
+
             // 该发布未包含本版资产时不提示更新，避免把用户引到下不到自己包的页面
             if (string.IsNullOrWhiteSpace(lookup.AssetVersion))
             {

@@ -47,6 +47,16 @@ public static class UpdateChecker
 
         /// <summary>本版对应的资产文件名（如 multi-tray-v1.2.0.zip）。</summary>
         public string? AssetName { get; init; }
+
+        /// <summary>
+        /// 资产列表是否**成功取到并解析过**。
+        ///
+        /// 为什么需要它：AssetVersion 为 null 有两种完全不同的含义 ——
+        /// 「该发布确实没有本版的包」（可以放心说「已是最新」）与
+        /// 「资产列表这次没取到」（网络抖动，此时说「已是最新」是在撒谎）。
+        /// 调用方靠这个字段区分，避免把失败说成最新。
+        /// </summary>
+        public bool AssetsResolved { get; init; }
     }
 
     /// <summary>
@@ -113,11 +123,14 @@ public static class UpdateChecker
                 AssetVersion = version,
                 AssetName = version == null
                     ? null
-                    : names.FirstOrDefault(n => ParseAssetVersion(new[] { n }, assetPrefix) == version)
+                    : names.FirstOrDefault(n => ParseAssetVersion(new[] { n }, assetPrefix) == version),
+                AssetsResolved = true
             };
         }
         catch
         {
+            // 资产列表没取到：Tag 已经有了，但「本版有没有新包」无从判断，
+            // 因此 AssetsResolved 保持 false，调用方不得把它当成「已是最新」。
             return lookup;
         }
     }

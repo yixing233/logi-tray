@@ -718,5 +718,12 @@ public static class ProtocolTests
         CheckEq("相同版本相等", UpdateChecker.CompareVersions("1.2.0", "1.2.0"), 0);
         CheckEq("缺位补 0", UpdateChecker.CompareVersions("1.2", "1.2.0"), 0);
         Check("null 视为 0.0.0", UpdateChecker.CompareVersions(null, "0.0.0") == 0);
+
+        // ── 7. 「没取到资产」不能被当成「已是最新」 ──
+        // AssetVersion == null 有两种含义：该发布确实没有本版的包 vs 资产列表
+        // 这次没取到。调用方靠 AssetsResolved 区分；未解析时它必须是 false，
+        // 否则网络抖动会被 UI 说成「已是最新版本」。
+        Check("未解析资产时 AssetsResolved 为假",
+                !new UpdateChecker.ReleaseLookup { Tag = "v1.4.0" }.AssetsResolved);
     }
 }

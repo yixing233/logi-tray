@@ -324,6 +324,13 @@ internal sealed class AboutForm : Form
 
             string current = AppVersion();
 
+            // 资产列表没取到（网络抖动）不能说「已是最新」——那是撒谎
+            if (!lookup.AssetsResolved)
+            {
+                _statusLabel.Text = "未能获取版本信息，请稍后重试";
+                return;
+            }
+
             // 该发布没有本版的包时不提示更新，避免引到下不到自己包的页面
             if (string.IsNullOrWhiteSpace(lookup.AssetVersion))
             {
