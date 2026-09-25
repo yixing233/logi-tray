@@ -470,15 +470,40 @@ public sealed class MouseBatteryDetailsWindow : Window
 
         if (isCharging)
         {
+            // 闪电恒定位于电池正中，而填充条是从左向右生长的 ——
+            // 也就是说它**有时踩在填充条上，有时踩在卡片底色上**，
+            // 而这两种背景的明暗可以完全相反（浅色卡片 / 深色填充）。
+            //
+            // 曾用白色闪电：电量 30% 时填充只覆盖左侧三成，闪电落在浅色
+            // 卡片底色上 → 白底白字，整个充电标记等于不存在，且不报任何错。
+            // 单靠换一种颜色解决不了：强调色闪电踩在同色填充条上同样看不清。
+            //
+            // 因此用「强调色 + 底色光晕」：光晕取当前主题的表面色，
+            // 在卡片底色上它融进背景（只剩强调色闪电），
+            // 在填充条上它把闪电与填充隔开。两种背景下都读得出来。
+            fillBlock.Opacity = 0.30;
+
             var bolt = new TextBlock
             {
                 Text = LucideIcons.Zap,
                 FontFamily = ThemeService.LucideFont,
-                FontSize = 8.5,
-                Foreground = Brushes.White,
+                FontSize = 9,
+                Foreground = batteryAccent,
                 HorizontalAlignment = WpfAlign.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
+
+            if (ThemeService.SolidSurfaceBrush is SolidColorBrush surface)
+            {
+                bolt.Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = surface.Color,
+                    BlurRadius = 3,
+                    ShadowDepth = 0,
+                    Opacity = 1,
+                };
+            }
+
             innerGrid.Children.Add(bolt);
         }
 

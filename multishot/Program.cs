@@ -283,7 +283,7 @@ internal static class Shot
             ThemeService.SetThemeMode(mode);
             var win = new MultiSettingsWindow(settings);
             string path = Path.Combine(outDir, $"settings_{tag}.png");
-            var (bytes, texts, root) = Render(win, path);
+            var (bytes, texts, root, _) = Render(win, path);
 
             Console.WriteLine($"[settings/{tag}] {path}  {bytes} bytes");
             bad += Check(texts, tag, new[]
@@ -306,7 +306,7 @@ internal static class Shot
             // 关于页：同一窗口切页后再渲染一次，确认二级页面内容齐全
             win.ShowAboutPageForTest();
             string aboutPath = Path.Combine(outDir, $"about_{tag}.png");
-            var (aboutBytes, aboutTexts, aboutRoot) = Render(win, aboutPath);
+            var (aboutBytes, aboutTexts, aboutRoot, _) = Render(win, aboutPath);
             Console.WriteLine($"[about/{tag}] {aboutPath}  {aboutBytes} bytes");
             bad += Check(aboutTexts, tag + "/about", new[]
             {
@@ -340,7 +340,7 @@ internal static class Shot
             ThemeService.SetThemeMode(mode);
             var win = new DeviceCardWindow(readings, settings, () => { });
             string path = Path.Combine(outDir, $"card_{tag}.png");
-            var (bytes, texts, root) = Render(win, path);
+            var (bytes, texts, root, bmp) = Render(win, path);
 
             Console.WriteLine($"[card/{tag}] {path}  {bytes} bytes");
             bad += Check(texts, tag, new[] { "设备电量" });
@@ -355,6 +355,7 @@ internal static class Shot
                 "关闭",
             });
             bad += CheckCardIcons(root, tag);
+            bad += CheckChargeBoltVisible(root, bmp, readings, tag);
             win.Close();
         }
         return bad;
@@ -409,8 +410,8 @@ internal static class Shot
     /// 把窗口视觉树离屏渲染并收集其中所有文本。
     /// 返回渲染字节数与文本集合，供调用方断言关键文案确实存在。
     /// </summary>
-    private static (int bytes, List<string> texts, DependencyObject root) Render(
-        Window win, string path)
+    private static (int bytes, List<string> texts, DependencyObject root,
+                    RenderTargetBitmap bmp) Render(Window win, string path)
     {
         // 把窗口**移到所有显示器之外**再渲染。
         //
@@ -464,7 +465,7 @@ internal static class Shot
         DependencyObject? root = win.Content as DependencyObject;
         if (root != null) Collect(root, texts);
 
-        return ((int)new FileInfo(path).Length, texts, root ?? win);
+        return ((int)new FileInfo(path).Length, texts, root ?? win, bmp);
     }
 
     private static void Collect(DependencyObject node, List<string> into)
@@ -563,6 +564,115 @@ internal static class Shot
 
         Console.WriteLine($"  [{tag}] 图标按钮 {2 - bad}/2 存在（共发现 {buttons.Count} 个按钮）");
         return bad;
+    }
+
+    /// <summary>
+    /// 断言「充电闪电」真的**看得见**，而不只是存在于视觉树里。
+    ///
+    /// 这条断言来自一个真实的静默失败：闪电原先用白色绘制，而它恒定位于
+    /// 电池正中、填充条却是从左向右生长的 —— 电量 30% 时填充只覆盖左侧
+    /// 三成，闪电落在浅色卡片底色上，白底白字，整个充电标记等于不存在
+    /// （用户反馈「充电咋没有充电的图标呢」）。
+    ///
+    /// 之前的断言全都抓不到它：文案断言只看 TextBlock.Text，
+    /// 图标断言只看字形码点 —— 而这类 bug 里**字形、位置、尺寸全对**，
+    /// 错的只有颜色。所以这里直接读渲染出的像素，要求闪电所在的矩形里
+    /// 存在足够的明暗反差；单色（例如白底白字、或强调色压在同色填充上）
+    /// 会被判为失败。
+    /// </summary>
+    private static int CheckChargeBoltVisible(DependencyObject root,
+                                              RenderTargetBitmap bmp,
+                                              List<DeviceReading> readings,
+                                              string tag)
+    {
+        var bolts = new List<System.Windows.Controls.TextBlock>();
+        FindTextBlocks(root, bolts);
+        bolts = bolts.FindAll(tb => tb.Text == MouseBatteryTray.LucideIcons.Zap);
+
+        int charging = readings.FindAll(r => r.IsOnline && r.IsCharging).Count;
+        if (charging == 0)
+        {
+            Console.WriteLine($"  [{tag}] 无充电设备，跳过闪电可见性检查");
+            return 0;
+        }
+        if (bolts.Count < charging)
+        {
+            Console.WriteLine(
+                $"  !! [{tag}] 有 {charging} 台设备在充电，却只找到 {bolts.Count} 个闪电字形");
+            return 1;
+        }
+
+        var content = root as FrameworkElement;
+        if (content == null || content.ActualWidth <= 0)
+        {
+            Console.WriteLine($"  !! [{tag}] 无法定位渲染内容，闪电检查跳过");
+            return 1;
+        }
+
+        // 位图是 96dpi 下按 content 的逻辑尺寸渲染的，用它换算像素坐标
+        double scale = bmp.PixelWidth / content.ActualWidth;
+
+        int invisible = 0;
+        foreach (var bolt in bolts)
+        {
+            if (bolt.ActualWidth <= 0 || bolt.ActualHeight <= 0) continue;
+
+            System.Windows.Point p;
+            try
+            {
+                p = bolt.TransformToAncestor(content).Transform(new System.Windows.Point(0, 0));
+            }
+            catch (InvalidOperationException)
+            {
+                continue; // 不在同一棵视觉树里
+            }
+
+            int x0 = (int)Math.Floor(p.X * scale);
+            int y0 = (int)Math.Floor(p.Y * scale);
+            int w = Math.Max(1, (int)Math.Ceiling(bolt.ActualWidth * scale));
+            int h = Math.Max(1, (int)Math.Ceiling(bolt.ActualHeight * scale));
+            x0 = Math.Clamp(x0, 0, Math.Max(0, bmp.PixelWidth - 1));
+            y0 = Math.Clamp(y0, 0, Math.Max(0, bmp.PixelHeight - 1));
+            w = Math.Min(w, bmp.PixelWidth - x0);
+            h = Math.Min(h, bmp.PixelHeight - y0);
+            if (w <= 0 || h <= 0) continue;
+
+            var px = new byte[w * h * 4];
+            bmp.CopyPixels(new Int32Rect(x0, y0, w, h), px, w * 4, 0);
+
+            double lo = double.MaxValue, hi = double.MinValue;
+            for (int i = 0; i < px.Length; i += 4)
+            {
+                // Pbgra32 -> 近似亮度（alpha 恒为 255，这里不做合成）
+                double lum = 0.114 * px[i] + 0.587 * px[i + 1] + 0.299 * px[i + 2];
+                if (lum < lo) lo = lum;
+                if (lum > hi) hi = lum;
+            }
+
+            // 阈值 60/255：白底白字约 5，强调色压同色填充约 0
+            if (hi - lo < 60)
+            {
+                Console.WriteLine(
+                    $"  !! [{tag}] 闪电在 {w}x{h} 区域内几乎没有明暗反差 " +
+                    $"(亮度 {lo:F0}~{hi:F0})：字形存在但看不见");
+                invisible++;
+            }
+        }
+
+        Console.WriteLine(
+            $"  [{tag}] 充电闪电可见性 {bolts.Count - invisible}/{bolts.Count} 通过");
+        return invisible;
+    }
+
+    private static void FindTextBlocks(DependencyObject node,
+                                       List<System.Windows.Controls.TextBlock> into)
+    {
+        if (node is System.Windows.Controls.TextBlock tb) into.Add(tb);
+        int n = VisualTreeHelper.GetChildrenCount(node);
+        for (int i = 0; i < n; i++)
+        {
+            FindTextBlocks(VisualTreeHelper.GetChild(node, i), into);
+        }
     }
 
     /// <summary>
