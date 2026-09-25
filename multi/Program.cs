@@ -156,6 +156,11 @@ internal static class Program
         {
             string pct = r.Percent >= 0 ? $"{r.Percent,3}%" : "  --";
             string state = r.IsOnline ? r.StatusText : "已休眠/离线";
+            if (r.HasLastKnown)
+            {
+                state += $"（上次 {r.LastKnownPercent}%，"
+                       + $"{BatteryHistory.FormatAge(r.LastKnownAt!.Value, DateTime.Now)}）";
+            }
             Console.WriteLine($"  {pct}  {r.Name}");
             Console.WriteLine($"        {KindText(r.Kind)} · {state} · 来源 {r.Source}");
         }

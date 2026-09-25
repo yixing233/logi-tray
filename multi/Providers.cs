@@ -70,6 +70,11 @@ public static class DeviceReader
             }
         }
 
+        // 记住刚读到的电量、给休眠设备回填历史值。
+        // 放在排序之前：这一步只写 LastKnownPercent，不动 Percent，
+        // 因此下面的排序与低电量通知都仍然只看在线读数。
+        BatteryHistory.Apply(results);
+
         // 稳定排序：先按类别，再按名称，避免界面每次刷新顺序跳动
         return results
             .OrderBy(x => x.Kind)

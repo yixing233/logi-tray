@@ -39,6 +39,7 @@ internal static class Shot
                 failures += ShotIcons(outDir);
                 failures += ShotSettings(outDir);
                 failures += ShotCard(outDir);
+                failures += ShotSleepingCard(outDir);
             }
             catch (Exception ex)
             {
@@ -357,6 +358,98 @@ internal static class Shot
             });
             bad += CheckCardIcons(root, tag);
             bad += CheckChargeBoltVisible(root, bmp, readings, tag);
+            win.Close();
+        }
+        return bad;
+    }
+
+    /// <summary>
+    /// 休眠设备的卡片：大号数字保持「--%」，第二行小字给出睡前电量。
+    ///
+    /// 为什么必须单独造合成读数：真机驱动 <see cref="ShotCard"/> 时三台设备
+    /// 通常都在线，休眠分支根本不会被渲染，那条路径就永远没有覆盖。
+    ///
+    /// 用户需求（逐字）：「设备休眠的时候增加小字显示休眠之前的最后一次电量」。
+    /// 这里同时守住两条容易互相打架的约束：
+    ///   1) 小字必须出现（否则需求没实现）；
+    ///   2) 大号数字必须仍是不含数字的「--%」—— 若被历史值顶替成「77%」，
+    ///      用户会以为设备现在还有那么多电，比不显示更糟。
+    /// </summary>
+    private static int ShotSleepingCard(string outDir)
+    {
+        var settings = MultiSettings.Load();
+
+        var readings = new List<DeviceReading>
+        {
+            // 有记忆：应显示「上次 77% · N 小时前」
+            new()
+            {
+                Name = "PRO X Wireless",
+                Key = "logitech:PRO X Wireless",
+                Kind = DeviceKind.Mouse,
+                Source = "HID++",
+                Percent = -1,
+                IsOnline = false,
+                StatusText = "已休眠",
+                LastKnownPercent = 77,
+                LastKnownAt = DateTime.Now.AddHours(-2),
+            },
+            // 无记忆：第二行必须留空，不能编造数字
+            new()
+            {
+                Name = "MCHOSE V9 PRO",
+                Key = "mchose:none",
+                Kind = DeviceKind.Headset,
+                Source = "迈从",
+                Percent = -1,
+                IsOnline = false,
+                StatusText = "已休眠",
+            },
+        };
+
+        int bad = 0;
+        foreach (var (mode, tag) in new[] { ("light", "sleep-light"), ("dark", "sleep-dark") })
+        {
+            ThemeService.SetThemeMode(mode);
+            var win = new DeviceCardWindow(readings, settings, () => { });
+            string path = Path.Combine(outDir, $"card_{tag}.png");
+            var (bytes, texts, _, _) = Render(win, path);
+
+            Console.WriteLine($"[card/{tag}] {path}  {bytes} bytes");
+
+            bad += Check(texts, tag, new[] { "设备电量", "PRO X Wireless", "MCHOSE V9 PRO" });
+
+            // 小字本体：允许时间档位不同，但「上次 77%」必须原样出现
+            if (!texts.Exists(t => t.Contains("上次 77%", StringComparison.Ordinal)))
+            {
+                Console.WriteLine($"  !! [{tag}] 休眠设备未显示休眠前电量小字（期望含「上次 77%」）");
+                bad++;
+            }
+            else
+            {
+                Console.WriteLine($"  [{tag}] 休眠前电量小字 "
+                    + texts.Find(t => t.Contains("上次 77%", StringComparison.Ordinal)));
+            }
+
+            // 大号数字必须仍是 --%：历史值不得冒充当前读数
+            if (!texts.Exists(t => t.Contains("--%", StringComparison.Ordinal)))
+            {
+                Console.WriteLine($"  !! [{tag}] 休眠设备缺少「--%」（当前读数被历史值顶替了？）");
+                bad++;
+            }
+            if (texts.Exists(t => t.Trim() == "77%"))
+            {
+                Console.WriteLine($"  !! [{tag}] 休眠设备的大号数字显示成了 77%（应用 --%）");
+                bad++;
+            }
+
+            // 无记忆的设备不得凭空出现历史小字
+            if (texts.Exists(t => t.Contains("上次 0%", StringComparison.Ordinal)))
+            {
+                Console.WriteLine($"  !! [{tag}] 无记忆设备凭空显示了历史电量");
+                bad++;
+            }
+
             win.Close();
         }
         return bad;

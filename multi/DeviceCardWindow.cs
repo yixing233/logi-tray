@@ -289,15 +289,25 @@ public sealed class DeviceCardWindow : Window
         });
         left.Children.Add(new TextBlock
         {
-            // 离线设备不显示「来源 · XXX」：来源是内部实现细节，
-            // 对用户没有意义（用户要求移除）。
+            // 离线设备：用历史值补一行小字，说明睡前还剩多少。
+            // 大号数字保持「--%」不变 —— 那是当前读数，拿旧值顶替
+            // 会让人以为现在还有那么多电（用户明确要的是「小字」）。
+            //
+            // 在线时仍是「电量等级 · XXX」；来源是内部实现细节，
+            // 对用户没有意义（用户要求移除），不在这里出现。
             Text = r.IsOnline
                 ? $"电量等级 · {Protocols.LevelText(r.Percent)}"
-                : "",
+                : (r.HasLastKnown
+                    ? BatteryHistory.Describe(r.LastKnownPercent, r.LastKnownAt,
+                                              DateTime.Now)
+                    : ""),
             FontSize = 10.5,
             FontWeight = FontWeights.Medium,
-            Foreground = ThemeService.TechBlueBrush,
-            Margin = new Thickness(0, 1, 0, 0)
+            Foreground = r.IsOnline
+                ? ThemeService.TechBlueBrush
+                : ThemeService.FaintTextBrush,
+            Margin = new Thickness(0, 1, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis
         });
         Grid.SetColumn(left, 0);
         row.Children.Add(left);

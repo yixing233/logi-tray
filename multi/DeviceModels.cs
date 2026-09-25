@@ -54,6 +54,22 @@ public sealed class DeviceReading
 
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
 
+    /// <summary>
+    /// 休眠前最后一次读到的电量；-1 表示没有记忆。
+    ///
+    /// 由 <see cref="BatteryHistory.Apply"/> 在设备离线时回填。
+    /// **刻意与 <see cref="Percent"/> 分开**：Percent 是当前读数，
+    /// 离线时必须保持 -1（界面显示「--%」）；这里是历史，
+    /// 只用来在卡片上补一行小字，绝不参与排序或低电量通知。
+    /// </summary>
+    public int LastKnownPercent { get; set; } = -1;
+
+    /// <summary>上面那个电量是什么时候读到的；null 表示没有记忆。</summary>
+    public DateTime? LastKnownAt { get; set; }
+
+    /// <summary>是否有可显示的休眠前电量。</summary>
+    public bool HasLastKnown => !IsOnline && Percent < 0 && LastKnownPercent >= 0;
+
     public static DeviceReading Offline(string name, DeviceKind kind, string source)
         => new()
         {

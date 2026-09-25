@@ -40,6 +40,7 @@ public static class ProtocolTests
         TestAtkKeyboardSequence();
         TestLevelText();
         TestNotifyDedup();
+        TestBatteryHistory();
 
         Console.WriteLine(new string('=', 66));
         Console.WriteLine($"通过 {_passed} 项，失败 {_failed} 项");
@@ -501,5 +502,125 @@ public static class ProtocolTests
         // 严重阈值也走同一逻辑
         Check("5% 严重阈值应通知",
             Protocols.ShouldNotify(5, false, 10, -1));
+    }
+
+    // ───────────── 休眠前电量记忆 ─────────────
+
+    /// <summary>
+    /// 纯逻辑自检：不碰文件系统，直接喂合成的读数列表。
+    ///
+    /// 需求（用户逐字）：「设备休眠的时候增加小字显示休眠之前的最后一次电量」。
+    /// 这里要守住三件事：
+    ///   1) 在线读数会被记住，离线时能取回；
+    ///   2) 回填只写 LastKnownPercent，**绝不动 Percent**（否则大号数字
+    ///      会用旧值冒充当前值，比不显示更糟）；
+    ///   3) 键对不上时只有唯一候选才回退，多个候选宁可放弃。
+    /// </summary>
+    private static void TestBatteryHistory()
+    {
+        Console.WriteLine("\n[休眠前电量]");
+
+        var now = new DateTime(2026, 1, 10, 12, 0, 0);
+
+        // ── 1. 在线读到 → 记住 → 离线回填 ──
+        var map = new Dictionary<string, BatteryHistory.Entry>();
+        var online = new List<DeviceReading>
+        {
+            new() { Name = "PRO X Wireless", Key = "logitech:PRO X Wireless",
+                    Percent = 77, IsOnline = true }
+        };
+        Check("在线读数应触发落盘", BatteryHistory.ApplyTo(map, online, now));
+        CheckEq("在线读数被记住", map["logitech:PRO X Wireless"].Percent, 77);
+
+        var offline = new List<DeviceReading>
+        {
+            new() { Name = "罗技设备", Key = "logitech:unknown",
+                    Percent = -1, IsOnline = false }
+        };
+        BatteryHistory.ApplyTo(map, offline, now.AddMinutes(30));
+        CheckEq("唯一候选可回退（键从设备名退化成 unknown）",
+                offline[0].LastKnownPercent, 77);
+        CheckEq("回填时不动当前读数", offline[0].Percent, -1);
+        Check("HasLastKnown 成立", offline[0].HasLastKnown);
+        CheckEq("小字文案",
+                BatteryHistory.Describe(offline[0].LastKnownPercent,
+                                        offline[0].LastKnownAt, now.AddHours(2)),
+                "上次 77% · 2 小时前");
+
+        // ── 2. 有多个候选时不猜 ──
+        var map2 = new Dictionary<string, BatteryHistory.Entry>
+        {
+            ["logitech:A"] = new() { Percent = 50, At = now },
+            ["logitech:B"] = new() { Percent = 60, At = now },
+        };
+        var amb = new List<DeviceReading>
+        {
+            new() { Name = "罗技设备", Key = "logitech:unknown",
+                    Percent = -1, IsOnline = false }
+        };
+        BatteryHistory.ApplyTo(map2, amb, now);
+        CheckEq("多候选不张冠李戴", amb[0].LastKnownPercent, -1);
+        Check("多候选时 HasLastKnown 为假", !amb[0].HasLastKnown);
+
+        // ── 3. 精确命中优先于回退 ──
+        var map3 = new Dictionary<string, BatteryHistory.Entry>
+        {
+            ["logitech:A"] = new() { Percent = 50, At = now },
+            ["logitech:B"] = new() { Percent = 60, At = now },
+        };
+        var exact = new List<DeviceReading>
+        {
+            new() { Name = "A", Key = "logitech:A", Percent = -1, IsOnline = false }
+        };
+        BatteryHistory.ApplyTo(map3, exact, now);
+        CheckEq("精确命中取自己的记录", exact[0].LastKnownPercent, 50);
+
+        // ── 4. 过期记录不再使用 ──
+        var stale = new Dictionary<string, BatteryHistory.Entry>
+        {
+            ["logitech:A"] = new() { Percent = 50, At = now },
+        };
+        var later = new List<DeviceReading>
+        {
+            new() { Name = "A", Key = "logitech:A", Percent = -1, IsOnline = false }
+        };
+        BatteryHistory.ApplyTo(stale, later,
+            now.AddDays(BatteryHistory.MaxAgeDays + 1));
+        CheckEq("超过 MaxAgeDays 不再回填", later[0].LastKnownPercent, -1);
+        Check("过期记录被清出表", !stale.ContainsKey("logitech:A"));
+
+        // ── 5. 在线时绝不使用历史值（哪怕表里有） ──
+        var map5 = new Dictionary<string, BatteryHistory.Entry>
+        {
+            ["logitech:A"] = new() { Percent = 50, At = now },
+        };
+        var live = new List<DeviceReading>
+        {
+            new() { Name = "A", Key = "logitech:A", Percent = 90, IsOnline = true }
+        };
+        BatteryHistory.ApplyTo(map5, live, now.AddMinutes(1));
+        Check("在线设备不回填历史", live[0].LastKnownPercent == -1);
+        Check("在线设备 HasLastKnown 为假", !live[0].HasLastKnown);
+        CheckEq("在线读数覆盖旧记录", map5["logitech:A"].Percent, 90);
+
+        // ── 6. 没有记忆的离线设备仍显示 --% ──
+        var empty = new List<DeviceReading>
+        {
+            new() { Name = "X", Key = "mchose:xxx", Percent = -1, IsOnline = false }
+        };
+        BatteryHistory.ApplyTo(new Dictionary<string, BatteryHistory.Entry>(),
+                               empty, now);
+        CheckEq("无记忆时不回填", empty[0].LastKnownPercent, -1);
+        Check("无记忆时 HasLastKnown 为假", !empty[0].HasLastKnown);
+
+        // ── 7. 时间文案 ──
+        CheckEq("刚刚", BatteryHistory.FormatAge(now.AddSeconds(-20), now), "刚刚");
+        CheckEq("分钟", BatteryHistory.FormatAge(now.AddMinutes(-5), now), "5 分钟前");
+        CheckEq("小时", BatteryHistory.FormatAge(now.AddHours(-3), now), "3 小时前");
+        CheckEq("天", BatteryHistory.FormatAge(now.AddDays(-2), now), "2 天前");
+        CheckEq("未来时间按刚刚处理",
+                BatteryHistory.FormatAge(now.AddMinutes(5), now), "刚刚");
+        CheckEq("无时间戳时只显示电量",
+                BatteryHistory.Describe(42, null, now), "上次 42%");
     }
 }
