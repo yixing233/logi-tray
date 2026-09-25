@@ -29,6 +29,8 @@
     <Compile Include="..\shared\AppPalette.cs" LinkBase="Shared" />
     <Compile Include="..\shared\AutoStartService.cs" LinkBase="Shared" />
     <Compile Include="..\shared\UnmanagedMethods.cs" LinkBase="Shared" />
+    <!-- 三个版本共用同一套「检查更新」逻辑：各自比对属于自己的资产版本号 -->
+    <Compile Include="..\shared\UpdateChecker.cs" LinkBase="Shared" />
   </ItemGroup>
 
   <ItemGroup>

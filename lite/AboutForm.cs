@@ -310,25 +310,38 @@ internal sealed class AboutForm : Form
 
         try
         {
-            string? latestTag = await FetchLatestTagAsync();
-            if (string.IsNullOrWhiteSpace(latestTag))
+            // 比较的是本版自己的资产版本号（logi-tray-lite-v1.2.0.zip → 1.2.0），
+            // 而不是 release 的 tag：三版独立编号，tag 通常远大于本版版本号，
+            // 拿它比较会让用户被永久提示有新版本。详见 UpdateChecker。
+            var lookup = await UpdateChecker
+                .LookupAsync(AppIdentity.Name, "logi-tray-lite-update-check");
+
+            if (lookup == null)
             {
                 _statusLabel.Text = "未能获取版本信息，请稍后重试";
                 return;
             }
 
             string current = AppVersion();
-            if (CompareVersions(latestTag.TrimStart('v', 'V'), current) > 0)
+
+            // 该发布没有本版的包时不提示更新，避免引到下不到自己包的页面
+            if (string.IsNullOrWhiteSpace(lookup.AssetVersion))
             {
-                _statusLabel.Text = $"发现新版本 {latestTag}（当前 {current}）";
+                _statusLabel.Text = $"已是最新版本 {current}";
+                return;
+            }
+
+            if (UpdateChecker.CompareVersions(lookup.AssetVersion, current) > 0)
+            {
+                _statusLabel.Text = $"发现新版本 {lookup.AssetVersion}（当前 {current}）";
                 var result = MessageBox.Show(this,
-                    $"发现新版本 {latestTag}（当前 {current}）。\n\n是否前往下载页面？",
+                    $"发现新版本 {lookup.AssetVersion}（当前 {current}）。\n\n是否前往下载页面？",
                     "logi-tray-lite 检查更新",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Information);
 
                 if (result == DialogResult.Yes)
                 {
-                    OpenUrl($"{RepoUrl}/releases/latest");
+                    OpenUrl($"{UpdateChecker.RepoUrl}/releases/latest");
                 }
             }
             else
@@ -346,57 +359,5 @@ internal sealed class AboutForm : Form
             _checkButton.Enabled = true;
             _checking = false;
         }
-    }
-
-    /// <summary>
-    /// 通过 /releases/latest 的 302 跳转解析最新 tag。
-    /// 规避 api.github.com 未认证时的 60 次/小时限流（会直接返回 403）。
-    /// </summary>
-    private static async Task<string?> FetchLatestTagAsync()
-    {
-        try
-        {
-            using var handler = new HttpClientHandler { AllowAutoRedirect = false };
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
-
-            using var resp = await client.GetAsync($"{RepoUrl}/releases/latest");
-            var location = resp.Headers.Location?.ToString();
-            if (string.IsNullOrEmpty(location))
-            {
-                return null;
-            }
-
-            // 形如 https://github.com/owner/repo/releases/tag/v1.0.2
-            const string marker = "/releases/tag/";
-            int idx = location.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            return idx < 0 ? null : location[(idx + marker.Length)..].Trim('/');
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static int CompareVersions(string a, string b)
-    {
-        static int[] Parts(string s) => s.Split('.', StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => int.TryParse(p, out int v) ? v : 0)
-            .ToArray();
-
-        int[] pa = Parts(a);
-        int[] pb = Parts(b);
-        int len = Math.Max(pa.Length, pb.Length);
-
-        for (int i = 0; i < len; i++)
-        {
-            int x = i < pa.Length ? pa[i] : 0;
-            int y = i < pb.Length ? pb[i] : 0;
-            if (x != y)
-            {
-                return x.CompareTo(y);
-            }
-        }
-
-        return 0;
     }
 }

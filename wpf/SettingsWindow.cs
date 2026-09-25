@@ -915,9 +915,13 @@ public sealed class SettingsWindow : Window
     /// 查询 GitHub 最新 release 并与当前版本比较。
     /// 只做只读 GET，不改动任何本地文件。
     ///
+    /// 比较对象是**本版自己的资产版本号**，而不是 release 的 tag：
+    /// 各版本刻意独立编号，同一次发布里 tag（如 v1.4.0）通常大于本版版本号
+    /// （完整版 1.2.1），拿 tag 比较会让用户被永久提示「发现新版本」，
+    /// 点「是」却又下到同一个包。详见 <see cref="UpdateChecker"/>。
+    ///
     /// 这里刻意不使用 REST API（api.github.com）：它对本机 IP 限制 60 次/小时，
-    /// 未认证用户很容易触发 403。改为请求 releases/latest 网页并读取 302 的
-    /// Location 头，同样能拿到最新 tag，且不受该配额限制。
+    /// 未认证用户很容易触发 403。改为请求网页，不受该配额限制。
     /// </summary>
     private async void CheckForUpdatesAsync()
     {
@@ -936,24 +940,34 @@ public sealed class SettingsWindow : Window
 
         try
         {
-            string? latestTag = await FetchLatestTagAsync().ConfigureAwait(true);
+            var lookup = await UpdateChecker
+                .LookupAsync(AppIdentity.Name, "logi-tray-update-check")
+                .ConfigureAwait(true);
 
-            if (string.IsNullOrWhiteSpace(latestTag))
+            if (lookup == null)
             {
                 status.Text = "未能获取版本信息，请稍后重试";
                 return;
             }
 
             string current = AppVersion();
-            if (CompareVersions(latestTag.TrimStart('v', 'V'), current) > 0)
+
+            // 该发布未包含本版资产时不提示更新，避免把用户引到下不到自己包的页面
+            if (string.IsNullOrWhiteSpace(lookup.AssetVersion))
             {
-                status.Text = $"发现新版本 {latestTag}";
+                status.Text = $"已是最新版本 {current}";
+                return;
+            }
+
+            if (UpdateChecker.CompareVersions(lookup.AssetVersion, current) > 0)
+            {
+                status.Text = $"发现新版本 {lookup.AssetVersion}";
                 if (System.Windows.MessageBox.Show(this,
-                        $"发现新版本 {latestTag}（当前 {current}）。\n\n是否前往下载页面？",
+                        $"发现新版本 {lookup.AssetVersion}（当前 {current}）。\n\n是否前往下载页面？",
                         "logi-tray 检查更新",
                         MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
                 {
-                    OpenUrl($"{RepoUrl}/releases/latest");
+                    OpenUrl($"{UpdateChecker.RepoUrl}/releases/latest");
                 }
             }
             else
@@ -972,68 +986,6 @@ public sealed class SettingsWindow : Window
             button.IsEnabled = true;
             _updateCheckRunning = false;
         }
-    }
-
-    /// <summary>
-    /// 取最新 release 的 tag。请求 releases/latest，禁止自动跟随重定向，
-    /// 从 302 的 Location 头解析出形如 .../releases/tag/v1.0.1 的版本号。
-    /// </summary>
-    private static async Task<string?> FetchLatestTagAsync()
-    {
-        var handler = new System.Net.Http.HttpClientHandler
-        {
-            AllowAutoRedirect = false
-        };
-
-        using var http = new System.Net.Http.HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromSeconds(12)
-        };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("logi-tray-update-check");
-
-        using var resp = await http.GetAsync($"{RepoUrl}/releases/latest").ConfigureAwait(false);
-
-        int code = (int)resp.StatusCode;
-        if (code is >= 300 and < 400 &&
-            resp.Headers.Location is Uri loc)
-        {
-            string path = loc.AbsolutePath.TrimEnd('/');
-            int idx = path.LastIndexOf('/');
-            if (idx >= 0 && idx + 1 < path.Length)
-            {
-                return Uri.UnescapeDataString(path.Substring(idx + 1));
-            }
-        }
-
-        if (resp.IsSuccessStatusCode)
-        {
-            // 没有重定向时说明该仓库还没有任何 release
-            return null;
-        }
-
-        return null;
-    }
-
-    /// <summary>比较点分版本号，返回 a 相对 b 的大小（&gt;0 表示 a 更新）。</summary>
-    private static int CompareVersions(string a, string b)
-    {
-        static int[] Parts(string s) => s.Split('.', StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => int.TryParse(new string(p.TakeWhile(char.IsDigit).ToArray()), out int n) ? n : 0)
-            .ToArray();
-
-        int[] pa = Parts(a);
-        int[] pb = Parts(b);
-        int len = Math.Max(pa.Length, pb.Length);
-        for (int i = 0; i < len; i++)
-        {
-            int va = i < pa.Length ? pa[i] : 0;
-            int vb = i < pb.Length ? pb[i] : 0;
-            if (va != vb)
-            {
-                return va - vb;
-            }
-        }
-        return 0;
     }
 
     private static StackPanel CreateCardContainer() => new()

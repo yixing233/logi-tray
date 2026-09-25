@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using MouseBatteryTray;
 
 namespace MultiTray;
 
@@ -41,6 +42,7 @@ public static class ProtocolTests
         TestLevelText();
         TestNotifyDedup();
         TestBatteryHistory();
+        TestUpdateChecker();
 
         Console.WriteLine(new string('=', 66));
         Console.WriteLine($"通过 {_passed} 项，失败 {_failed} 项");
@@ -622,5 +624,99 @@ public static class ProtocolTests
                 BatteryHistory.FormatAge(now.AddMinutes(5), now), "刚刚");
         CheckEq("无时间戳时只显示电量",
                 BatteryHistory.Describe(42, null, now), "上次 42%");
+    }
+
+    // ───────────── 检查更新 ─────────────
+
+    /// <summary>
+    /// 检查更新的版本比较自检。
+    ///
+    /// 存在理由：这里曾经有一个真实缺陷 —— 三版各自独立编号，而检查更新却拿
+    /// release 的 tag 和本程序版本比较。于是从 v1.4.0 这个发布里下载到的
+    /// multi-tray 1.2.0 会被永远告知「发现新版本 v1.4.0」，点「是」下载到的
+    /// 又是同一个包。下面第 3 组断言就是在钉死这个场景。
+    /// </summary>
+    private static void TestUpdateChecker()
+    {
+        Console.WriteLine("\n[检查更新]");
+
+        // ── 1. 从 302 Location 解析 tag ──
+        CheckEq("解析 tag（绝对地址）",
+                UpdateChecker.ParseTagFromLocation(
+                    "https://github.com/yixing233/logi-tray/releases/tag/v1.4.0"),
+                "v1.4.0");
+        CheckEq("解析 tag（带查询串）",
+                UpdateChecker.ParseTagFromLocation(
+                    "https://github.com/o/r/releases/tag/v1.4.0?expanded=true"),
+                "v1.4.0");
+        CheckEq("解析 tag（相对路径）",
+                UpdateChecker.ParseTagFromLocation("/yixing233/logi-tray/releases/tag/v1.4.0"),
+                "v1.4.0");
+        Check("空 Location 不算 tag",
+                UpdateChecker.ParseTagFromLocation(null) == null);
+
+        // ── 2. 从资产列表里挑出属于本版的版本号 ──
+        // 顺序刻意照抄真实发布页：实测 v1.4.0 页面上轻量版的资产排在完整版前面。
+        // 这个顺序正是「按前缀 StartsWith 匹配」会出错的地方。
+        var v140 = new List<string>
+        {
+            "logi-tray-lite-v1.2.0.zip",
+            "logi-tray-v1.2.1.zip",
+            "multi-tray-v1.2.0.zip",
+            "source-code.zip",
+        };
+        CheckEq("完整版取到 1.2.1",
+                UpdateChecker.ParseAssetVersion(v140, "logi-tray"), "1.2.1");
+        CheckEq("轻量版取到 1.2.0",
+                UpdateChecker.ParseAssetVersion(v140, "logi-tray-lite"), "1.2.0");
+        CheckEq("多品牌版取到 1.2.0",
+                UpdateChecker.ParseAssetVersion(v140, "multi-tray"), "1.2.0");
+
+        // 关键：前缀必须整名匹配。若用 StartsWith，完整版的 logi-tray 会先命中
+        // logi-tray-lite-v1.2.0.zip，把轻量版版本号当成自己的，反之亦然。
+        Check("完整版不会误取轻量版资产",
+                UpdateChecker.ParseAssetVersion(v140, "logi-tray") != "1.2.0");
+
+        // ── 3. 真实缺陷场景：tag 是 v1.4.0，但本版资产是 1.2.0 ──
+        string tag = "v1.4.0";
+        Check("旧逻辑（拿 tag 比）会把 1.2.0 误判为有新版本",
+                UpdateChecker.CompareVersions(tag.TrimStart('v', 'V'), "1.2.0") > 0);
+
+        Check("新逻辑：multi-tray 1.2.0 对 1.2.0 不算新版本",
+                UpdateChecker.CompareVersions(
+                    UpdateChecker.ParseAssetVersion(v140, "multi-tray"), "1.2.0") <= 0);
+        Check("新逻辑：完整版 1.2.1 对 1.2.1 不算新版本",
+                UpdateChecker.CompareVersions(
+                    UpdateChecker.ParseAssetVersion(v140, "logi-tray"), "1.2.1") <= 0);
+        Check("新逻辑：轻量版 1.2.0 对 1.2.0 不算新版本",
+                UpdateChecker.CompareVersions(
+                    UpdateChecker.ParseAssetVersion(v140, "logi-tray-lite"), "1.2.0") <= 0);
+
+        // ── 4. 真的有新版时必须报出来（防止改成永远不提示） ──
+        var newer = new List<string> { "multi-tray-v1.3.0.zip", "logi-tray-v1.5.0.zip" };
+        Check("multi-tray 1.2.0 → 1.3.0 报新版本",
+                UpdateChecker.CompareVersions(
+                    UpdateChecker.ParseAssetVersion(newer, "multi-tray"), "1.2.0") > 0);
+        Check("完整版 1.2.1 → 1.5.0 报新版本",
+                UpdateChecker.CompareVersions(
+                    UpdateChecker.ParseAssetVersion(newer, "logi-tray"), "1.2.1") > 0);
+        Check("轻量版没有新资产时不报版本号",
+                UpdateChecker.ParseAssetVersion(newer, "logi-tray-lite") == null);
+
+        // ── 5. HTML 抽取资产名 ──
+        string html = "<li><a href=\"/x\"><span class=\"text-bold\">multi-tray-v1.2.0.zip</span></a></li>"
+                    + "<li><span class=\"text-bold\">logi-tray-v1.2.1.zip</span></li>";
+        var names = UpdateChecker.ParseAssetNames(html);
+        CheckEq("抽到 2 个资产", names.Count, 2);
+        Check("抽到 multi-tray 资产名", names.Contains("multi-tray-v1.2.0.zip"));
+        Check("页面无资产时返回空表",
+                UpdateChecker.ParseAssetNames("<html></html>").Count == 0);
+
+        // ── 6. 版本比较的基本性质 ──
+        Check("1.10.0 > 1.9.0", UpdateChecker.CompareVersions("1.10.0", "1.9.0") > 0);
+        Check("2.0.0 > 1.99.99", UpdateChecker.CompareVersions("2.0.0", "1.99.99") > 0);
+        CheckEq("相同版本相等", UpdateChecker.CompareVersions("1.2.0", "1.2.0"), 0);
+        CheckEq("缺位补 0", UpdateChecker.CompareVersions("1.2", "1.2.0"), 0);
+        Check("null 视为 0.0.0", UpdateChecker.CompareVersions(null, "0.0.0") == 0);
     }
 }

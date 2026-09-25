@@ -627,8 +627,12 @@ public sealed class MultiSettingsWindow : Window
     /// <summary>
     /// 查询 GitHub 最新 release 并与当前版本比较。只做只读 GET，不改本地文件。
     ///
+    /// 比较对象是**本版自己的资产版本号**，而不是 release 的 tag：
+    /// 三个版本各自独立编号，同一次发布里 tag（如 v1.4.0）几乎总是大于
+    /// 本版版本号（multi-tray 只有 1.2.0），拿 tag 比较会让用户被永久
+    /// 提示「发现新版本」却反复下到同一个包。详见 <see cref="UpdateChecker"/>。
+    ///
     /// 刻意不用 REST API（api.github.com）：它对未认证 IP 限 60 次/小时，很容易 403。
-    /// 这里请求 releases/latest 网页，读取 302 的 Location 头拿最新 tag，不受配额限制。
     /// </summary>
     private async void CheckForUpdatesAsync()
     {
@@ -647,25 +651,36 @@ public sealed class MultiSettingsWindow : Window
 
         try
         {
-            string? latestTag = await FetchLatestTagAsync().ConfigureAwait(true);
+            var lookup = await UpdateChecker
+                .LookupAsync(AppIdentity.Name, "multi-tray-update-check")
+                .ConfigureAwait(true);
 
-            if (string.IsNullOrWhiteSpace(latestTag))
+            if (lookup == null)
             {
                 status.Text = "未能获取版本信息，请稍后重试";
                 return;
             }
 
             string current = AppVersion();
-            if (CompareVersions(latestTag.TrimStart('v', 'V'), current) > 0)
+
+            // 该发布里没有本版的包（例如只重发了别的版本）：不提示更新，避免
+            // 把用户引到一个下不到自己包的页面。
+            if (string.IsNullOrWhiteSpace(lookup.AssetVersion))
             {
-                status.Text = $"发现新版本 {latestTag}";
+                status.Text = $"已是最新版本 {current}";
+                return;
+            }
+
+            if (UpdateChecker.CompareVersions(lookup.AssetVersion, current) > 0)
+            {
+                status.Text = $"发现新版本 {lookup.AssetVersion}";
                 if (MessageBox.Show(this,
-                        $"发现新版本 {latestTag}（当前 {current}）。\n\n是否前往下载页面？",
+                        $"发现新版本 {lookup.AssetVersion}（当前 {current}）。\n\n是否前往下载页面？",
                         "multi-tray 检查更新",
                         MessageBoxButton.YesNo, MessageBoxImage.Information)
                     == MessageBoxResult.Yes)
                 {
-                    OpenUrl($"{RepoUrl}/releases/latest");
+                    OpenUrl($"{UpdateChecker.RepoUrl}/releases/latest");
                 }
             }
             else
@@ -683,58 +698,6 @@ public sealed class MultiSettingsWindow : Window
             button.IsEnabled = true;
             _updateCheckRunning = false;
         }
-    }
-
-    /// <summary>取最新 release 的 tag。禁止自动跟随重定向，从 302 的 Location 解析。</summary>
-    private static async Task<string?> FetchLatestTagAsync()
-    {
-        var handler = new System.Net.Http.HttpClientHandler
-        {
-            AllowAutoRedirect = false
-        };
-
-        using var http = new System.Net.Http.HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromSeconds(12)
-        };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("multi-tray-update-check");
-
-        using var resp = await http.GetAsync($"{RepoUrl}/releases/latest")
-            .ConfigureAwait(false);
-
-        int code = (int)resp.StatusCode;
-        if (code is >= 300 and < 400 && resp.Headers.Location is Uri loc)
-        {
-            string path = loc.AbsolutePath.TrimEnd('/');
-            int idx = path.LastIndexOf('/');
-            if (idx >= 0 && idx + 1 < path.Length)
-            {
-                return Uri.UnescapeDataString(path.Substring(idx + 1));
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>比较点分版本号，&gt;0 表示 a 更新。</summary>
-    private static int CompareVersions(string a, string b)
-    {
-        static int[] Parts(string s) => s
-            .Split('.', StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => int.TryParse(new string(p.TakeWhile(char.IsDigit).ToArray()),
-                out int n) ? n : 0)
-            .ToArray();
-
-        int[] pa = Parts(a);
-        int[] pb = Parts(b);
-        int len = Math.Max(pa.Length, pb.Length);
-        for (int i = 0; i < len; i++)
-        {
-            int va = i < pa.Length ? pa[i] : 0;
-            int vb = i < pb.Length ? pb[i] : 0;
-            if (va != vb) return va - vb;
-        }
-        return 0;
     }
 
     // ───────────── 组件构造 ─────────────
