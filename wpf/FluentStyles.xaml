@@ -226,11 +226,14 @@
             <Setter.Value>
                 <ControlTemplate TargetType="CheckBox">
                     <Grid Background="Transparent">
-                        <!-- 胶囊外壳 -->
+                        <!-- 胶囊填充层：与描边分成两层，避免同一 Border 上同色描边与填充在圆角内缘
+                             叠加时覆盖率抵消，露出底色的浅色细弧 -->
+                        <Border x:Name="SwitchPillFill" Width="40" Height="20" CornerRadius="10"
+                                Background="{DynamicResource ThemeTogglePillBackground}"/>
+                        <!-- 胶囊描边层：只画边框，不画填充 -->
                         <Border x:Name="SwitchPill" Width="40" Height="20" CornerRadius="10"
                                 BorderThickness="1.5"
-                                BorderBrush="{DynamicResource ThemeTogglePillBorder}"
-                                Background="{DynamicResource ThemeTogglePillBackground}">
+                                BorderBrush="{DynamicResource ThemeTogglePillBorder}">
                             <!-- 内部滑动圆圈 -->
                             <Canvas Width="40" Height="20" ClipToBounds="True">
                                 <Ellipse x:Name="SwitchKnob" Width="12" Height="12"
@@ -246,7 +249,7 @@
                     <ControlTemplate.Triggers>
                         <!-- 开启状态 -->
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="SwitchPill" Property="Background" Value="#0067C0"/>
+                            <Setter TargetName="SwitchPillFill" Property="Background" Value="#0067C0"/>
                             <Setter TargetName="SwitchPill" Property="BorderBrush" Value="#0067C0"/>
                             <Setter TargetName="SwitchKnob" Property="Fill" Value="White"/>
                             <Setter TargetName="SwitchKnob" Property="Canvas.Left" Value="22"/>
@@ -257,7 +260,7 @@
                                 <Condition Property="IsChecked" Value="True"/>
                                 <Condition Property="IsMouseOver" Value="True"/>
                             </MultiTrigger.Conditions>
-                            <Setter TargetName="SwitchPill" Property="Background" Value="#1870B8"/>
+                            <Setter TargetName="SwitchPillFill" Property="Background" Value="#1870B8"/>
                             <Setter TargetName="SwitchPill" Property="BorderBrush" Value="#1870B8"/>
                             <Setter TargetName="SwitchKnob" Property="Fill" Value="White"/>
                         </MultiTrigger>

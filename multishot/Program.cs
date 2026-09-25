@@ -283,7 +283,7 @@ internal static class Shot
             ThemeService.SetThemeMode(mode);
             var win = new MultiSettingsWindow(settings);
             string path = Path.Combine(outDir, $"settings_{tag}.png");
-            var (bytes, texts, root, _) = Render(win, path);
+            var (bytes, texts, root, settingsBmp) = Render(win, path);
 
             Console.WriteLine($"[settings/{tag}] {path}  {bytes} bytes");
             bad += Check(texts, tag, new[]
@@ -302,6 +302,7 @@ internal static class Shot
                 "取消",
             });
             bad += CheckToggleStyle(root, tag);
+            bad += CheckTogglePillFlat(root, settingsBmp, tag);
 
             // 关于页：同一窗口切页后再渲染一次，确认二级页面内容齐全
             win.ShowAboutPageForTest();
@@ -519,6 +520,148 @@ internal static class Shot
         Console.WriteLine(
             $"  [{tag}] 开关样式 {boxes.Count - wrong}/{boxes.Count} 是 Fluent 胶囊");
         return wrong;
+    }
+
+    /// <summary>
+    /// 断言开启状态的胶囊内部是**干净的单色蓝**，没有多余圆弧。
+    ///
+    /// 用户报过：「这个开关在开关里面看到莫名其妙的细的白色圆弧段」。
+    /// 根因是同一个 Border 上同时画 1.5px 同色描边和填充，圆角内缘两层
+    /// 抗锯齿覆盖率互相抵消（约 76%），底色从缝里透出来成一道浅弧 ——
+    /// **开关尺寸、颜色、文案全部正常**，所以 CheckToggleStyle 抓不到。
+    ///
+    /// 这里直接读渲染像素：把描边最外 2px 和把手圆盘排除掉，剩下区域应当
+    /// 只有一种亮度；出现明显偏亮（或偏暗）的孤岛即判失败。
+    /// </summary>
+    private static int CheckTogglePillFlat(DependencyObject root,
+                                           RenderTargetBitmap bmp,
+                                           string tag)
+    {
+        var content = root as FrameworkElement;
+        if (content == null || content.ActualWidth <= 0)
+        {
+            Console.WriteLine($"  !! [{tag}] 无法定位渲染内容，开关平整度检查跳过");
+            return 1;
+        }
+
+        var boxes = new List<System.Windows.Controls.CheckBox>();
+        FindCheckBoxes(root, boxes);
+        boxes = boxes.FindAll(b => b.IsChecked == true);
+        if (boxes.Count == 0)
+        {
+            Console.WriteLine($"  [{tag}] 没有开启状态的开关，跳过平整度检查");
+            return 0;
+        }
+
+        double scale = bmp.PixelWidth / content.ActualWidth;
+        int bad = 0, checkedCount = 0;
+
+        foreach (var box in boxes)
+        {
+            var fill = FindTemplateChild<System.Windows.Controls.Border>(box, "SwitchPillFill");
+            if (fill == null || fill.ActualWidth <= 0 || fill.ActualHeight <= 0)
+            {
+                Console.WriteLine($"  !! [{tag}] 找不到胶囊填充层 SwitchPillFill");
+                bad++;
+                continue;
+            }
+
+            System.Windows.Point p;
+            try
+            {
+                p = fill.TransformToAncestor(content)
+                          .Transform(new System.Windows.Point(0, 0));
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+
+            int x0 = (int)Math.Round(p.X * scale);
+            int y0 = (int)Math.Round(p.Y * scale);
+            int w = (int)Math.Round(fill.ActualWidth * scale);
+            int h = (int)Math.Round(fill.ActualHeight * scale);
+            if (w < 8 || h < 8) { bad++; continue; }
+
+            x0 = Math.Clamp(x0, 0, Math.Max(0, bmp.PixelWidth - 1));
+            y0 = Math.Clamp(y0, 0, Math.Max(0, bmp.PixelHeight - 1));
+            w = Math.Min(w, bmp.PixelWidth - x0);
+            h = Math.Min(h, bmp.PixelHeight - y0);
+            if (w < 8 || h < 8) { bad++; continue; }
+
+            var px = new byte[w * h * 4];
+            bmp.CopyPixels(new Int32Rect(x0, y0, w, h), px, w * 4, 0);
+
+            double Luminance(int x, int y)
+            {
+                int i = (y * w + x) * 4;
+                return 0.114 * px[i] + 0.587 * px[i + 1] + 0.299 * px[i + 2];
+            }
+
+            // 把手圆盘（含外沿抗锯齿）要排除，它本来就是亮色圆
+            double kcx = 0, kcy = 0;
+            int kn = 0;
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (Luminance(x, y) > 200) { kcx += x; kcy += y; kn++; }
+                }
+            }
+            if (kn > 0) { kcx /= kn; kcy /= kn; }
+            double kr = Math.Max(w, h) * 0.55;   // 足够包住把手及其阴影
+
+            // 只取内部：剥掉描边与圆角的抗锯齿带
+            int inset = (int)Math.Ceiling(2.5 * scale);
+            var vals = new List<double>();
+            for (int y = inset; y < h - inset; y++)
+            {
+                for (int x = inset; x < w - inset; x++)
+                {
+                    if (kn > 0)
+                    {
+                        double dx = x - kcx, dy = y - kcy;
+                        if (dx * dx + dy * dy <= kr * kr * 0.30) continue;
+                    }
+                    double l = Luminance(x, y);
+                    if (l > 200) continue;        // 把手本体
+                    vals.Add(l);
+                }
+            }
+            if (vals.Count < 40) { bad++; continue; }
+
+            vals.Sort();
+            double body = vals[vals.Count / 2];   // 中位数就是蓝色本体
+            // 双向统计：浅色主题下缝比本体亮，深色主题下比本体暗
+            int outliers = 0;
+            foreach (var l in vals)
+            {
+                if (Math.Abs(l - body) > 8) outliers++;
+            }
+
+            checkedCount++;
+            // 实测（1:1 离屏渲染，浅色主题）：
+            //   有缺陷的模板 inset=3 区域 158 像素里 13 个偏亮（8.2%）
+            //   修复后的模板 164 像素里 0 个（0.0%）
+            // 阈值取 1/16（6.25%），两侧都留出充裕余量。
+            if (outliers * 16 > vals.Count)
+            {
+                Console.WriteLine(
+                    $"  !! [{tag}] 胶囊内部有多余圆弧：{outliers}/{vals.Count} 个像素偏离本体 " +
+                    $"超过 8（本体亮度 {body:F0}，范围 {vals[0]:F0}~{vals[vals.Count - 1]:F0}）");
+                bad++;
+            }
+        }
+
+        Console.WriteLine($"  [{tag}] 胶囊内部平整度 {checkedCount - bad}/{checkedCount} 通过");
+        return bad;
+    }
+
+    private static T? FindTemplateChild<T>(System.Windows.Controls.Control control, string name)
+        where T : class
+    {
+        if (control.Template == null) return null;
+        return control.Template.FindName(name, control) as T;
     }
 
     private static void FindCheckBoxes(DependencyObject node,
