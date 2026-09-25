@@ -512,22 +512,60 @@ public sealed class AtkProvider : IBatteryProvider
     /// 为什么必须连发整轮：单发那一帧 0x1A 时设备会把命令字节回成 0xFF
     /// （驱动源码里 0xFF 是明确的错误返回），只有走完前导才被受理。
     ///
-    /// 时序取抓包形态（34 帧落在一秒内 => gapMs 12），收尾留 300ms 接住
-    /// 迟到的应答。失败返回 null，由调用方继续试旧协议。
+    /// **重试是必需的**：真机连续 4 次读取里会有 1 次整轮无应答 ——
+    /// 键盘若刚被唤醒或正忙于背光/按键上报，会整轮丢弃。单次失败就报离线
+    /// 会让界面频繁闪 `--`，因此最多试 <see cref="KbdAttempts"/> 次，
+    /// 每次收尾等待递增（越往后越可能等到迟到的应答）。
     /// </summary>
     private static DeviceReading? TryReadZ87Keyboard(Hid.HidInterface d, string name, string key)
     {
-        var frames = Protocols.BuildAtkKbdSequence();
-        var ex = Hid.ProbeBurst(d.Path, frames, d.InputLength, gapMs: 12, afterMs: 300);
-        if (!ex.WriteOk) return null;
+        const int KbdAttempts = 2;
 
-        // 应答可能以任意顺序到达，且前导帧的应答也满足长度要求，
-        // 因此逐条用解析器筛：只有命令码对得上 0x1A 的才是电量帧。
+        for (int attempt = 0; attempt < KbdAttempts; attempt++)
+        {
+            if (attempt > 0) Thread.Sleep(120);
+
+            // 每轮重新构造：序号必须从 1 重新开始，
+            // 设备用序号与请求配对，跨轮沿用会让它对不上。
+            var frames = Protocols.BuildAtkKbdSequence();
+
+            // 优先用「逐帧写 + 排空读」这条节拍。
+            //
+            // 真机实测：`--diag-atk` 同一条命令走 ProbeDrain 时 4/4 全部读到，
+            // 走 ProbeBurst（后台线程连发）则 8 次里只成功 4~5 次。
+            // 差异不在写，而在读：连发路径的后台读线程反复
+            // ReadFile/CancelIo，与写入抢同一个句柄，应答会偶发丢失。
+            // 排空读把读写严格串起来，因此稳定。
+            var slow = Hid.ProbeDrain(d.Path, frames, d.InputLength,
+                                      settleMs: 15, drainMs: 90);
+            if (TryParseAny(slow, name, key, out var fromSlow)) return fromSlow;
+
+            // 慢节拍没读到再试连发（与浏览器同速），只作为兜底
+            var fast = Hid.ProbeBurst(d.Path, frames, d.InputLength,
+                                      gapMs: 12, afterMs: 400 + attempt * 250);
+            if (TryParseAny(fast, name, key, out var fromFast)) return fromFast;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 从一次交换的报告里挑出电量应答。
+    ///
+    /// 应答可能以任意顺序到达，且前导帧的应答也满足长度要求，
+    /// 因此逐条用解析器筛：只有命令码对得上 0x1A 的才是电量帧。
+    /// </summary>
+    private static bool TryParseAny(Hid.ExchangeResult ex, string name, string key,
+                                    out DeviceReading? reading)
+    {
+        reading = null;
+        if (!ex.WriteOk) return false;
+
         foreach (var rep in ex.Reports)
         {
             if (!Protocols.TryParseAtkKbdPower(rep, out int pct, out bool charging)) continue;
 
-            return new DeviceReading
+            reading = new DeviceReading
             {
                 Name = name,
                 Percent = pct,
@@ -538,9 +576,10 @@ public sealed class AtkProvider : IBatteryProvider
                 Source = "ATK Z87 键盘",
                 Key = key,
             };
+            return true;
         }
 
-        return null;
+        return false;
     }
 
     /// <summary>

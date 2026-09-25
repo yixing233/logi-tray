@@ -1127,6 +1127,13 @@ public static class Hid
             if (WaitForSingleObject(ev, (uint)left) != 0)
             {
                 CancelIo(h);
+
+                // 必须**等被取消的 I/O 真正落定**再返回。
+                // 否则这个 OVERLAPPED（及其事件）会在下一次 ReadFile 里被复用，
+                // 而 ResetEvent 也可能在 I/O 尚未完成时就清掉事件 ——
+                // 两者都会让后续读到的报告丢失或串台，表现为「偶尔整轮无应答」。
+                // 这是 ProbeBurst 在真机上 3/8 次读不到电量的根因。
+                GetOverlappedResult(h, ref ov, out _, true);
                 ResetEvent(ev);
                 return;
             }
