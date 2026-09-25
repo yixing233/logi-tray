@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
 using MouseBatteryTray;
 
 namespace MultiTray;
@@ -725,5 +729,124 @@ public static class ProtocolTests
         // 否则网络抖动会被 UI 说成「已是最新版本」。
         Check("未解析资产时 AssetsResolved 为假",
                 !new UpdateChecker.ReleaseLookup { Tag = "v1.4.0" }.AssetsResolved);
+
+        // ── 8. 两步 HTTP 流程（302 → 资产页）端到端 ──
+        // 前面几组只测解析函数，覆盖不到「禁止自动重定向、从 Location 取 tag」
+        // 这段真正容易写错的代码。这里用进程内桩服务器把整条链路跑通。
+        TestUpdateCheckerHttpFlow();
+    }
+
+    /// <summary>
+    /// 用一个进程内的最小 HTTP 桩服务器跑通 LookupAsync 的两步请求：
+    /// /releases/latest 必须返回 302（客户端禁止自动跟随），
+    /// 再用 Location 里的 tag 去取 /releases/expanded_assets/&lt;tag&gt; 的 HTML。
+    /// </summary>
+    private static void TestUpdateCheckerHttpFlow()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        try
+        {
+            listener.Start();
+        }
+        catch
+        {
+            Check("HTTP 端到端（桩服务器启动失败，跳过）", true);
+            return;
+        }
+
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var stop = new CancellationTokenSource();
+
+        var server = new Thread(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                TcpClient client;
+                try
+                {
+                    client = listener.AcceptTcpClient();
+                }
+                catch
+                {
+                    return;
+                }
+
+                try
+                {
+                    using (client)
+                    using (var stream = client.GetStream())
+                    {
+                        // 读到请求行即可
+                        var buf = new byte[4096];
+                        int n = stream.Read(buf, 0, buf.Length);
+                        string req = Encoding.ASCII.GetString(buf, 0, n);
+                        string path = req.Split(' ').Length > 1 ? req.Split(' ')[1] : "";
+
+                        string response;
+                        if (path.StartsWith("/releases/latest", StringComparison.Ordinal))
+                        {
+                            // 关键：302 且 Location 含 /releases/tag/
+                            response = "HTTP/1.1 302 Found\r\n"
+                                     + $"Location: http://127.0.0.1:{port}/releases/tag/v1.4.0\r\n"
+                                     + "Content-Length: 0\r\nConnection: close\r\n\r\n";
+                        }
+                        else if (path.StartsWith("/releases/expanded_assets/v1.4.0", StringComparison.Ordinal))
+                        {
+                            // 顺序照抄真实发布页：轻量版排在完整版前面
+                            const string body =
+                                "<li><span class=\"text-bold\">logi-tray-lite-v1.2.0.zip</span></li>" +
+                                "<li><span class=\"text-bold\">logi-tray-v1.2.1.zip</span></li>" +
+                                "<li><span class=\"text-bold\">multi-tray-v1.2.0.zip</span></li>";
+                            response = "HTTP/1.1 200 OK\r\n"
+                                     + "Content-Type: text/html; charset=utf-8\r\n"
+                                     + $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n"
+                                     + "Connection: close\r\n\r\n" + body;
+                        }
+                        else
+                        {
+                            response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        }
+
+                        var bytes = Encoding.UTF8.GetBytes(response);
+                        stream.Write(bytes, 0, bytes.Length);
+                        stream.Flush();
+                    }
+                }
+                catch
+                {
+                    // 单个连接失败不影响断言
+                }
+            }
+        })
+        { IsBackground = true };
+        server.Start();
+
+        string saved = UpdateChecker.BaseUrl;
+        try
+        {
+            UpdateChecker.BaseUrl = $"http://127.0.0.1:{port}";
+
+            var lookup = UpdateChecker.LookupAsync("multi-tray", "self-test", 5)
+                .GetAwaiter().GetResult();
+
+            Check("端到端：能取到发布信息", lookup != null);
+            CheckEq("端到端：从 302 解析出 tag", lookup?.Tag, "v1.4.0");
+            Check("端到端：资产列表已解析", lookup?.AssetsResolved == true);
+            CheckEq("端到端：多品牌版版本号", lookup?.AssetVersion, "1.2.0");
+            CheckEq("端到端：资产文件名", lookup?.AssetName, "multi-tray-v1.2.0.zip");
+            Check("端到端：不误判为有新版本",
+                    UpdateChecker.CompareVersions(lookup?.AssetVersion, "1.2.0") <= 0);
+
+            // 完整版必须取到 1.2.1，而不是排在它前面的轻量版 1.2.0
+            var full = UpdateChecker.LookupAsync("logi-tray", "self-test", 5)
+                .GetAwaiter().GetResult();
+            CheckEq("端到端：完整版取到自己的 1.2.1", full?.AssetVersion, "1.2.1");
+        }
+        finally
+        {
+            UpdateChecker.BaseUrl = saved;
+            stop.Cancel();
+            try { listener.Stop(); } catch { }
+        }
     }
 }

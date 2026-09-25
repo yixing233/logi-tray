@@ -32,6 +32,13 @@ public static class UpdateChecker
 
     private const string TagMarker = "/releases/tag/";
 
+    /// <summary>
+    /// 站点地址。正常恒等于 <see cref="RepoUrl"/>；自检里临时指向本地桩服务器，
+    /// 以便把「302 取 tag → 取资产页」这条两步 HTTP 流程也验证到
+    /// （只测解析函数覆盖不到重定向处理）。
+    /// </summary>
+    internal static string BaseUrl { get; set; } = RepoUrl;
+
     /// <summary>资产文件名：形如 multi-tray-v1.2.0.zip。</summary>
     private static readonly Regex ZipNamePattern =
         new(@">([A-Za-z0-9][A-Za-z0-9._\-]*\.zip)<", RegexOptions.Compiled);
@@ -75,7 +82,7 @@ public static class UpdateChecker
             using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
-            using var resp = await http.GetAsync($"{RepoUrl}/releases/latest").ConfigureAwait(false);
+            using var resp = await http.GetAsync($"{BaseUrl}/releases/latest").ConfigureAwait(false);
             int code = (int)resp.StatusCode;
 
             // 没有重定向到 /releases/tag/... 说明该仓库还没有任何发布
@@ -105,7 +112,7 @@ public static class UpdateChecker
             assetsHttp.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
             using var assets = await assetsHttp
-                .GetAsync($"{RepoUrl}/releases/expanded_assets/{Uri.EscapeDataString(tag!)}")
+                .GetAsync($"{BaseUrl}/releases/expanded_assets/{Uri.EscapeDataString(tag!)}")
                 .ConfigureAwait(false);
 
             if (!assets.IsSuccessStatusCode)

@@ -6,7 +6,7 @@ such as a missing native reader or a stale DLL.
 
 Checks:
   1. zip integrity and every required file present
-  2. the shipped --test-protocols passes (240 assertions, no hardware needed)
+  2. the shipped --test-protocols passes all its assertions (no hardware needed)
   3. the shipped --list runs and reports the three real devices
   4. the app actually starts and stays running from the extracted copy
   5. the bundled native reader is the current build (byte-identical to native/build)

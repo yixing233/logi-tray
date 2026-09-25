@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
@@ -48,6 +49,8 @@ internal static class Program
                     return AtkDiagnostics.Run();
                 case "--diag-mchose":
                     return MchoseDiagnostics.Run(args.Length > 1 && args[1] == "watch");
+                case "--check-update":
+                    return CheckUpdate();
                 case "--show-details":
                     return ShowDetailsOnce();
                 case "--show-settings":
@@ -125,6 +128,7 @@ internal static class Program
         Console.WriteLine("  multi-tray.exe --diag-atk     诊断 ATK 设备（打印原始收发字节）");
         Console.WriteLine("  multi-tray.exe --diag-mchose  诊断迈从设备（打印原始收发字节）");
         Console.WriteLine("  multi-tray.exe --diag-mchose watch  持续采样，用于确认充电状态字节");
+        Console.WriteLine("  multi-tray.exe --check-update 检查更新（打印本版资产版本号与比较结果）");
         Console.WriteLine("  multi-tray.exe --test-protocols  运行协议解析层自检（无需硬件）");
         Console.WriteLine("  multi-tray.exe --show-details    直接打开设备电量窗口");
         Console.WriteLine("  multi-tray.exe --show-settings   直接打开设置窗口");
@@ -176,6 +180,67 @@ internal static class Program
             Console.WriteLine("  * 耳机/键盘未通过其无线接收器连接");
         }
         return readable > 0 ? 0 : 2;
+    }
+
+    /// <summary>
+    /// 命令行版的检查更新：打印「最新发布的 tag」与「属于本版的资产版本号」，
+    /// 让用户不必开设置窗口就能确认检查更新是否正常。
+    ///
+    /// 存在理由：GitHub 网页抓取在真实网络里会因代理/墙而失败，而这些失败
+    /// 在 GUI 里只显示一句提示、看不到细节。这里把每一步都打出来。
+    /// </summary>
+    private static int CheckUpdate()
+    {
+        Console.WriteLine();
+        Console.WriteLine("检查更新");
+        Console.WriteLine(new string('=', 66));
+        Console.WriteLine($"仓库      {UpdateChecker.RepoUrl}");
+        Console.WriteLine($"本版标识  {AppIdentity.Name}");
+
+        string current = typeof(Program).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "1.0.0";
+        int plus = current.IndexOf('+');
+        if (plus > 0) current = current.Substring(0, plus);
+        Console.WriteLine($"当前版本  {current}");
+        Console.WriteLine();
+
+        var lookup = UpdateChecker.LookupAsync(AppIdentity.Name, "multi-tray-update-check")
+            .GetAwaiter().GetResult();
+
+        if (lookup == null)
+        {
+            Console.WriteLine("结果: 未能获取版本信息（网络不可达，或仓库还没有任何发布）");
+            return 2;
+        }
+
+        Console.WriteLine($"最新发布  {lookup.Tag}");
+
+        if (!lookup.AssetsResolved)
+        {
+            Console.WriteLine("结果: 拿到了 tag，但资产列表没取到 —— 无法判断本版是否有新包");
+            return 2;
+        }
+
+        Console.WriteLine($"本版资产  {lookup.AssetName ?? "(该发布中没有本版的包)"}");
+
+        if (string.IsNullOrWhiteSpace(lookup.AssetVersion))
+        {
+            Console.WriteLine($"结果: 已是最新版本 {current}（该发布未包含本版资产）");
+            return 0;
+        }
+
+        Console.WriteLine($"资产版本  {lookup.AssetVersion}");
+        int cmp = UpdateChecker.CompareVersions(lookup.AssetVersion, current);
+        if (cmp > 0)
+        {
+            Console.WriteLine($"结果: 发现新版本 {lookup.AssetVersion}（当前 {current}）");
+            Console.WriteLine($"下载页: {UpdateChecker.RepoUrl}/releases/latest");
+            return 1;
+        }
+
+        Console.WriteLine($"结果: 已是最新版本 {current}");
+        return 0;
     }
 
     private static string KindText(DeviceKind k) => k switch
