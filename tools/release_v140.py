@@ -1,5 +1,11 @@
 """Publish the v1.4.0 release containing all three editions.
 
+NOTE (2026-09): GitHub was unreachable from this machine for a long stretch, so this
+script could not be re-run to refresh the published assets after the update-check fix
+landed. The three zips in release/ are current; the release page's copies are one
+commit behind (they lack the update-check fix). Re-run this script once the network is
+back to refresh them -- it replaces existing assets rather than adding duplicates.
+
 Why one release for three editions: the README points users at /releases/latest
 and documents three archives, so a user following that link must find all three
 downloads in one place. A separate tag for the multi-brand edition would make
@@ -195,7 +201,13 @@ multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件�
 
 status, rel = api("GET", f"/repos/{REPO}/releases/tags/{TAG}")
 if status == 200:
+    # 刻意不动 draft / prerelease：本脚本只负责刷新说明与资产。
+    # 如果这个 release 曾被转成草稿（比如「还没本地测试完，先别公开」），
+    # 重跑本脚本后它必须仍然是草稿 —— 否则一次「只想更新资产」的重跑
+    # 就会把它悄悄推到公众面前。因此这里显式打印当前状态让人看清。
     print(f"release 已存在: {rel['html_url']}")
+    print(f"  当前状态: draft={rel['draft']}  prerelease={rel['prerelease']}"
+          + ("（草稿，公开页面上看不到）" if rel["draft"] else "（已公开）"))
     rid = rel["id"]
     api("PATCH", f"/repos/{REPO}/releases/{rid}", {"name": TITLE, "body": NOTES})
 else:

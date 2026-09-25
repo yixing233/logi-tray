@@ -1,4 +1,9 @@
-"""Publish v1.2.0 with the multi-feature native reader.
+"""历史记录：发布 v1.2.0 的脚本，已被 release_v140.py 取代，不要重跑。
+
+History. Superseded by release_v140.py -- running this again would push a stale
+release back to "latest".
+
+Publish v1.2.0 with the multi-feature native reader.
 
 v1.1.0's packages carried a stale native reader (329728 bytes, predating this
 work), so the multi-feature support had to go out under a new tag rather than

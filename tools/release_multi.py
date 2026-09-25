@@ -1,4 +1,9 @@
-"""Publish the v1.3.0 release containing all three editions.
+"""历史记录：发布 v1.3.1 的脚本，已被 release_v140.py 取代，不要重跑。
+
+保留它是因为它记录了当时**诚实声明「ATK 只回显」**这个（后来被证伪的）结论的
+原始措辞与资产组合。重跑它只会把一个过时的 release 重新推到最新，别再执行。
+
+Publish the v1.3.0 release containing all three editions.
 
 Decision: rather than a separate release for multi-tray, this creates one v1.3.0
 release holding all three archives. Reason: the README links users to
