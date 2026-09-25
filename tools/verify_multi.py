@@ -6,11 +6,15 @@ such as a missing native reader or a stale DLL.
 
 Checks:
   1. zip integrity and every required file present
-  2. the shipped --test-protocols passes (88 assertions, no hardware needed)
+  2. the shipped --test-protocols passes (217 assertions, no hardware needed)
   3. the shipped --list runs and reports the three real devices
   4. the app actually starts and stays running from the extracted copy
   5. the bundled native reader is the current build (byte-identical to native/build)
+
+Version-agnostic on purpose: this script used to hardcode multi-tray-v1.0.0.zip and
+therefore silently verified a stale archive after the next release was packaged.
 """
+import glob
 import hashlib
 import os
 import shutil
@@ -19,7 +23,9 @@ import tempfile
 import zipfile
 
 REPO = r"C:\code\chat-records\mouse-tray"
-ZIP = os.path.join(REPO, "release", "multi-tray-v1.0.0.zip")
+# newest multi-tray-v*.zip, so a repackaged release is always the one verified
+ZIP = max(glob.glob(os.path.join(REPO, "release", "multi-tray-v*.zip")),
+          key=os.path.getmtime)
 NATIVE = os.path.join(REPO, "native", "build", "mouse-tray.exe")
 
 REQUIRED = ["multi-tray.exe", "multi-tray.dll", "mouse-tray.exe", "app.ico",

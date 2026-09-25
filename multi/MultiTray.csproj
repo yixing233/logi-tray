@@ -15,7 +15,7 @@
     <AssemblyName>multi-tray</AssemblyName>
     <Product>multi-tray</Product>
     <Title>multi-tray</Title>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <RootNamespace>MultiTray</RootNamespace>
     <StartupObject>MultiTray.Program</StartupObject>
     <ApplicationIcon>app.ico</ApplicationIcon>
