@@ -121,6 +121,106 @@ public static class Protocols
         return frame;
     }
 
+    // ─────────── ATK Z87 系列键盘（WebHID 抓包实证）───────────
+
+    /// <summary>Z87 键盘协议的报告号。</summary>
+    public const byte AtkKbdReportId = 4;
+
+    /// <summary>Z87 键盘的电量命令码（驱动里的 <c>power_info = 26</c>）。</summary>
+    public const byte AtkKbdPowerCmd = 0x1A;
+
+    /// <summary>
+    /// Z87 键盘帧的发送长度。
+    ///
+    /// 载荷本身只有 31 字节，但该接口的输出报告是 64 字节，
+    /// Win32 中断写要求缓冲区**正好等于**报告长度：发 32 字节会
+    /// 直接失败（Win32 错误 87 ERROR_INVALID_PARAMETER），发 64 字节才通。
+    /// </summary>
+    public const int AtkKbdFrameLength = 64;
+
+    /// <summary>
+    /// 构造 Z87 键盘的完整请求序列：14 帧 LED 矩阵 + 2 帧键盘信息 + 1 帧电量。
+    ///
+    /// 抓包显示驱动「问电量」从来不是单发一帧 0x1A，而是先做一轮固定前导。
+    /// 只发那一帧 0x1A 时设备会把命令字节回成 0xFF（明确的「拒绝」）；
+    /// 复现完整前导后，[2] 才会被正确回填 0x1A 并带回电量。
+    ///
+    /// 帧布局（**载荷**；Win32 侧把 Report ID 并入缓冲区首字节，故整体后移一位）：
+    ///   [0]=全局递增序号(1..17) [1]=0x00 [2]=命令码
+    ///   LED 帧另有 [3]=0x18、[4..5]=16 位小端偏移，逐帧 +0x18
+    /// 抓包实录：`01 00 1b 18 00`、`02 00 1b 18 18` … `0e 00 1b 18 38 01`、
+    /// `0f 00 03 18`、`10 00 03 0e 18`、`11 00 1a`。
+    /// </summary>
+    public static List<byte[]> BuildAtkKbdSequence(int frameLength = AtkKbdFrameLength)
+    {
+        var frames = new List<byte[]>();
+        byte seq = 0;
+
+        byte[] New(byte cmd)
+        {
+            var f = new byte[frameLength];
+            f[0] = AtkKbdReportId;
+            f[1] = ++seq;
+            f[3] = cmd;
+            return f;
+        }
+
+        for (int i = 0; i < 14; i++)
+        {
+            var f = New(0x1B);
+            int offset = i * 0x18;
+            f[4] = 0x18;
+            f[5] = (byte)(offset & 0xFF);
+            f[6] = (byte)((offset >> 8) & 0xFF);
+            frames.Add(f);
+        }
+
+        var info1 = New(0x03);
+        info1[4] = 0x18;
+        frames.Add(info1);
+
+        var info2 = New(0x03);
+        info2[4] = 0x0E;
+        info2[5] = 0x18;
+        frames.Add(info2);
+
+        frames.Add(New(AtkKbdPowerCmd));
+        return frames;
+    }
+
+    /// <summary>
+    /// 解析 Z87 键盘电量应答。实测帧：`04 11 00 1A 00 00 00 00 64 02 …`
+    ///   [3]=0x1A  [7]=电量(0x64=100)  [8]=状态(0x02=充电中)
+    ///
+    /// 驱动源码对应关系：`power = batteryCharge === 0 ? batteryLevel : void 0`，
+    /// 而 `batteryLevel`/`batteryCharge` 分别取载荷偏移 +2/+3 —— 即本函数
+    /// 的 [7]/[8]（含 Report ID 偏移一位）。
+    ///
+    /// 缓冲区首字节可能是 Report ID 也可能被驱动剥掉，故自动识别。
+    /// 命令码对不上就返回 false：设备在拒绝命令时会把 [2] 回成 0xFF。
+    /// </summary>
+    public static bool TryParseAtkKbdPower(byte[]? resp, out int percent, out bool charging)
+    {
+        percent = -1;
+        charging = false;
+        if (resp == null) return false;
+
+        int b = (resp.Length > 0 && resp[0] == AtkKbdReportId) ? 1 : 0;
+        if (resp.Length < b + 9) return false;
+        if (resp[b + 2] != AtkKbdPowerCmd) return false;
+
+        int p = resp[b + 7];
+        if (p > 100) p = 100;
+        if (p <= 0) return false;
+
+        percent = p;
+        // 驱动源码的判据是 batteryCharge !== 0 即视为充电中
+        // （`battery: batteryCharge === 0 ? Ns.discharging : Ns.charging`），
+        // 因此这里只判非零，不硬编码 0x02。
+        charging = resp[b + 8] != 0;
+        return true;
+    }
+
     /// <summary>
     /// 解析 ATK 协议 2 响应。
     /// 判据（照搬公开实现）：[1]==0x72 且 [5]==0x07；无线时电量在 [7]。

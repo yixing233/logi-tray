@@ -28,6 +28,22 @@ public static class Hid
     private const int HIDP_STATUS_SUCCESS = 0x00110000;
     private const int HIDP_STATUS_BUFFER_TOO_SMALL = unchecked((int)0xC0110007);
 
+    /// <summary>
+    /// IOCTL_HID_GET_REPORT_DESCRIPTOR = HID_CTL_CODE(0)
+    ///                                = CTL_CODE(FILE_DEVICE_KEYBOARD, 0, METHOD_NEITHER, FILE_ANY_ACCESS)
+    ///                                = (0x0B &lt;&lt; 16) | (0 &lt;&lt; 14) | (0 &lt;&lt; 2) | 3
+    ///                                = 0x000B0003。
+    ///
+    /// 注意低两位是 METHOD_NEITHER(3)，不是 0 —— 早先误写成 0x000B0000，
+    /// 导致 DeviceIoControl 一直返回失败、报告描述符永远读不到。
+    ///
+    /// HidP_GetCaps 只给出「最长的那个报告」的长度（各报告号取最大值），
+    /// 因此当设备同时存在 31 字节与 63 字节两种载荷时，它会报 64，
+    /// 让人误以为所有报告都该按 64 字节发。要拿到**按报告号区分**的真实
+    /// 长度，只能读原始报告描述符自己解析。
+    /// </summary>
+    private const uint IOCTL_HID_GET_REPORT_DESCRIPTOR = 0x000B0003;
+
     private static readonly Guid GUID_HID =
         new("4D1E55B2-F16F-11CF-88CB-001111000030");
 
@@ -133,6 +149,10 @@ public static class Hid
     private static extern bool ResetEvent(IntPtr h);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        SafeFileHandle h, uint code, IntPtr inBuf, int inSize,
+        byte[] outBuf, int outSize, out int returned, IntPtr overlapped);
 
     /// <summary>一个 HID 接口及其能力。</summary>
     public sealed class HidInterface
@@ -150,6 +170,109 @@ public static class Hid
         public string Id => $"{VendorId:X4}:{ProductId:X4}";
         public override string ToString() =>
             $"{Id} UP=0x{UsagePage:X4} IN={InputLength} OUT={OutputLength} FEAT={FeatureLength}";
+    }
+
+    /// <summary>
+    /// 报告描述符里解析出的「按报告号区分」的报告长度。
+    ///
+    /// 为什么需要：HidP_GetCaps 返回的 InputReportByteLength 是**所有报告号
+    /// 里的最大值**（含报告号字节）。若设备同时定义 reportId=3 → 2 字节 与
+    /// reportId=4 → 64 字节，GET_CAPS 只说 64，无法判断某个报告号实际多长。
+    /// </summary>
+    public sealed class ReportLengths
+    {
+        /// <summary>报告号 → 输入报告总长（含报告号字节）。</summary>
+        public readonly Dictionary<byte, int> Input = new();
+        /// <summary>报告号 → 输出报告总长（含报告号字节）。</summary>
+        public readonly Dictionary<byte, int> Output = new();
+
+        /// <summary>描述符是否显式声明了报告号（带 Report ID 的设备）。</summary>
+        public bool HasReportIds;
+    }
+
+    /// <summary>
+    /// 读取并解析 HID 报告描述符，得到每个报告号的真实长度。
+    ///
+    /// 只实现到「够用」的程度：跟踪 Report ID / Report Size / Report Count
+    /// 三个全局项，遇到 Input / Output 主项时把位宽累加到当前报告号上。
+    /// 变量的解析（Usage 等）一律跳过。解析失败返回 null。
+    /// </summary>
+    public static ReportLengths? GetReportLengths(string path)
+    {
+        var desc = GetReportDescriptor(path);
+        if (desc == null || desc.Length == 0) return null;
+
+        var r = new ReportLengths();
+        int reportSize = 0, reportCount = 0;
+        int globalReportId = 0;
+        byte curId = 0;
+
+        // 当前报告号是否已出现过（用于判断是否真的是带 ID 的设备）
+        int i = 0;
+        while (i < desc.Length)
+        {
+            byte b = desc[i++];
+            if (b == 0xFE)
+            {
+                // 长项：0xFE 后跟 1 字节长度、1 字节 tag
+                if (i + 1 >= desc.Length) break;
+                int len = desc[i++];
+                i++; // tag
+                i += len;
+                continue;
+            }
+
+            int size = b & 0x03;
+            if (size == 3) size = 4;
+            int type = (b >> 2) & 0x03;
+            int tag = (b >> 4) & 0x0F;
+
+            int val = 0;
+            for (int k = 0; k < size && i < desc.Length; k++) val |= desc[i + k] << (8 * k);
+            i += size;
+
+            switch (type)
+            {
+                case 1: // Global
+                    if (tag == 0) { globalReportId = val; curId = (byte)val; r.HasReportIds = true; }
+                    else if (tag == 7) reportSize = val;
+                    else if (tag == 9) reportCount = val;
+                    break;
+                case 0: // Main
+                    if (tag == 8 || tag == 9) // Input / Output
+                    {
+                        int bytes = (reportSize * reportCount + 7) / 8;
+                        // reportId 为 0 时不占字节；非 0 时报告号本身占 1 字节
+                        int total = bytes + (globalReportId == 0 ? 0 : 1);
+                        var map = tag == 8 ? r.Input : r.Output;
+                        map.TryGetValue(curId, out int prev);
+                        if (total > prev) map[curId] = total;
+                        _ = curId;
+                    }
+                    break;
+            }
+        }
+        return r;
+    }
+
+    /// <summary>用 IOCTL 取原始报告描述符字节；失败返回 null。</summary>
+    public static byte[]? GetReportDescriptor(string path)
+    {
+        var h = Open(path, 0, false); // 描述符只读即可
+        if (h.IsInvalid) h = Open(path, GENERIC_READ, false);
+        if (h.IsInvalid) return null;
+
+        using (h)
+        {
+            var buf = new byte[4096];
+            if (!DeviceIoControl(h, IOCTL_HID_GET_REPORT_DESCRIPTOR,
+                                 IntPtr.Zero, 0, buf, buf.Length, out int got,
+                                 IntPtr.Zero))
+                return null;
+            if (got <= 0) return null;
+            if (got < buf.Length) Array.Resize(ref buf, got);
+            return buf;
+        }
     }
 
     /// <summary>枚举当前所有 HID 接口。任何单个接口失败都不影响整体。</summary>
@@ -345,8 +468,7 @@ public static class Hid
     }
 
     /// <summary>只取控制端点的输入报告（不先写）。</summary>
-    public static byte[]? GetInputReport(string path, byte reportId, int length)
-    {
+    public static byte[]? GetInputReport(string path, byte reportId, int length)    {
         if (length <= 1) return null;
         var h = Open(path, GENERIC_READ | GENERIC_WRITE, false);
         if (h.IsInvalid) return null;
@@ -509,7 +631,519 @@ public static class Hid
         }
     }
 
-    /// <summary>在指定接口上被动监听一帧输入报告（不发送任何请求）。</summary>
+    /// <summary>
+    /// 用**控制端点写**输出报告，再从**中断 IN 端点读**应答。
+    ///
+    /// 这是此前唯一没试过的组合，也是 WebHID 的行为：WebHID 的 sendReport()
+    /// 对带编号报告走 Set_Report 控制传输，而 inputreport 事件则是主机在
+    /// 中断 IN 端点上排一个 ReadFile。此前要么「中断写 + 中断读」，要么
+    /// 「控制写 + 控制读」，二者都不匹配真正的驱动行为。
+    ///
+    /// <paramref name="writeViaControl"/> 为 false 时改用 WriteFile 写
+    /// （有些接口只接受其中一种）。
+    /// </summary>
+    public static byte[]? WriteControlReadInterrupt(string path, byte[] frame,
+                                                    int readLength, int settleMs,
+                                                    int timeoutMs,
+                                                    bool writeViaControl = true)
+    {
+        if (readLength <= 0) return null;
+
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, true);
+        if (h.IsInvalid) return null;
+
+        using (h)
+        {
+            IntPtr ev = CreateEvent(IntPtr.Zero, true, false, IntPtr.Zero);
+            if (ev == IntPtr.Zero) return null;
+
+            try
+            {
+                // 先把读排上，避免应答比读请求先到
+                var buf = new byte[readLength];
+                var ovr = new OVERLAPPED { hEvent = ev };
+                bool readPending = ReadFile(h, buf, buf.Length, IntPtr.Zero, ref ovr);
+                int readErr = Marshal.GetLastWin32Error();
+                bool readQueued = readPending || readErr == ERROR_IO_PENDING;
+
+                bool wrote;
+                if (writeViaControl)
+                {
+                    wrote = HidD_SetOutputReport(h, frame, frame.Length);
+                }
+                else
+                {
+                    var ovw = new OVERLAPPED { hEvent = ev };
+                    wrote = WriteFile(h, frame, frame.Length, IntPtr.Zero, ref ovw);
+                    if (!wrote && Marshal.GetLastWin32Error() == ERROR_IO_PENDING)
+                    {
+                        wrote = WaitForSingleObject(ev, (uint)timeoutMs) == 0 &&
+                                GetOverlappedResult(h, ref ovw, out _, false);
+                        ResetEvent(ev);
+                    }
+                }
+
+                if (!wrote)
+                {
+                    if (readQueued) CancelIo(h);
+                    return null;
+                }
+
+                if (settleMs > 0) Thread.Sleep(settleMs);
+
+                if (!readQueued)
+                {
+                    var ovr2 = new OVERLAPPED { hEvent = ev };
+                    if (!ReadFile(h, buf, buf.Length, IntPtr.Zero, ref ovr2))
+                    {
+                        if (Marshal.GetLastWin32Error() != ERROR_IO_PENDING) return null;
+                        if (WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                        {
+                            CancelIo(h);
+                            return null;
+                        }
+                    }
+                    if (!GetOverlappedResult(h, ref ovr2, out int got2, false)) return null;
+                    if (got2 <= 0) return null;
+                    if (got2 < buf.Length) Array.Resize(ref buf, got2);
+                    return buf;
+                }
+
+                if (WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                {
+                    CancelIo(h);
+                    return null;
+                }
+                if (!GetOverlappedResult(h, ref ovr, out int got, false)) return null;
+                if (got <= 0) return null;
+                if (got < buf.Length) Array.Resize(ref buf, got);
+                return buf;
+            }
+            finally
+            {
+                CloseHandle(ev);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 一次传输尝试的详细结果，供诊断工具区分「写失败」与「写成功但无应答」。
+    ///
+    /// 之所以需要：原来的诊断把两者都打印成「(无响应)」，
+    /// 结果无法判断问题出在管道还是命令 —— 这正是排查 ATK 时的盲点。
+    /// </summary>
+    public struct WriteResult
+    {
+        public bool WriteOk;
+        public int WriteError;
+        public byte[]? Response;
+        public string Describe()
+        {
+            if (!WriteOk) return $"写失败 (Win32 错误 {WriteError})";
+            return Response == null ? "写成功，读超时（设备未应答）"
+                                    : $"写成功，收到 {Response.Length} 字节";
+        }
+    }
+
+    /// <summary>
+    /// 写一帧（中断 OUT）**之后**再挂读，并报告写是否成功。
+    ///
+    /// 与 <see cref="ProbeInterruptCore"/> 的顺序相反：那边先挂读再写，
+    /// 这边先写后挂读（等于 <see cref="WriteThenRead"/> 加错误码）。
+    /// 两种顺序都保留，因为无法先验判断设备在哪一侧应答。
+    /// </summary>
+    public static WriteResult ProbeInterrupt(string path, byte[] frame, int readLength,
+                                             int settleMs, int timeoutMs)
+    {
+        var r = new WriteResult();
+        if (readLength <= 0) { r.WriteError = -1; return r; }
+
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, true);
+        if (h.IsInvalid) { r.WriteError = Marshal.GetLastWin32Error(); return r; }
+
+        using (h)
+        {
+            IntPtr ev = CreateEvent(IntPtr.Zero, true, false, IntPtr.Zero);
+            if (ev == IntPtr.Zero) { r.WriteError = Marshal.GetLastWin32Error(); return r; }
+            try
+            {
+                // 先写
+                var ovw = new OVERLAPPED { hEvent = ev };
+                bool wrote = WriteFile(h, frame, frame.Length, IntPtr.Zero, ref ovw);
+                int werr = Marshal.GetLastWin32Error();
+                if (!wrote && werr == ERROR_IO_PENDING)
+                {
+                    wrote = WaitForSingleObject(ev, (uint)timeoutMs) == 0 &&
+                            GetOverlappedResult(h, ref ovw, out _, false);
+                }
+                r.WriteOk = wrote;
+                r.WriteError = wrote ? 0 : werr;
+                ResetEvent(ev);
+                if (!wrote) return r;
+                if (settleMs > 0) Thread.Sleep(settleMs);
+
+                // 再挂读
+                var buf = new byte[readLength];
+                var ovr = new OVERLAPPED { hEvent = ev };
+                if (!ReadFile(h, buf, buf.Length, IntPtr.Zero, ref ovr) &&
+                    Marshal.GetLastWin32Error() != ERROR_IO_PENDING)
+                    return r;
+                if (WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                {
+                    CancelIo(h);
+                    return r;
+                }
+                if (!GetOverlappedResult(h, ref ovr, out int got, false) || got <= 0)
+                    return r;
+                if (got < buf.Length) Array.Resize(ref buf, got);
+                r.Response = buf;
+                return r;
+            }
+            finally { CloseHandle(ev); }
+        }
+    }
+
+    /// <summary>
+    /// **先挂读再写**，然后等应答；<paramref name="writeViaControl"/> 决定写走
+    /// 控制端点（HidD_SetOutputReport）还是中断 OUT（WriteFile）。
+    ///
+    /// 读请求在写之前提交，因为应答可能在写返回与读提交之间到达而被丢弃 ——
+    /// 这是排查 ATK 时的一个重要盲点（此前只用过 <see cref="ProbeInterrupt"/>
+    /// 的「写后挂读」）。
+    /// </summary>
+    public static WriteResult ProbeInterruptCore(string path, byte[] frame,
+                                                 int readLength, int settleMs,
+                                                 int timeoutMs, bool writeViaControl)
+    {
+        var r = new WriteResult();
+        if (readLength <= 0) { r.WriteError = -1; return r; }
+
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, true);
+        if (h.IsInvalid) { r.WriteError = Marshal.GetLastWin32Error(); return r; }
+
+        using (h)
+        {
+            IntPtr ev = CreateEvent(IntPtr.Zero, true, false, IntPtr.Zero);
+            if (ev == IntPtr.Zero) { r.WriteError = Marshal.GetLastWin32Error(); return r; }
+            try
+            {
+                // 先把读排上，避免应答比读请求先到而被丢弃
+                var buf = new byte[readLength];
+                var ovr = new OVERLAPPED { hEvent = ev };
+                bool readPending = ReadFile(h, buf, buf.Length, IntPtr.Zero, ref ovr);
+                int readErr = Marshal.GetLastWin32Error();
+                bool readQueued = readPending || readErr == ERROR_IO_PENDING;
+
+                bool wrote;
+                int werr = 0;
+                if (writeViaControl)
+                {
+                    wrote = HidD_SetOutputReport(h, frame, frame.Length);
+                    if (!wrote) werr = Marshal.GetLastWin32Error();
+                }
+                else
+                {
+                    var ovw = new OVERLAPPED { hEvent = ev };
+                    wrote = WriteFile(h, frame, frame.Length, IntPtr.Zero, ref ovw);
+                    werr = Marshal.GetLastWin32Error();
+                    if (!wrote && werr == ERROR_IO_PENDING)
+                    {
+                        wrote = WaitForSingleObject(ev, (uint)timeoutMs) == 0 &&
+                                GetOverlappedResult(h, ref ovw, out _, false);
+                    }
+                }
+                r.WriteOk = wrote;
+                r.WriteError = wrote ? 0 : werr;
+                ResetEvent(ev);
+
+                if (!wrote)
+                {
+                    if (readQueued) CancelIo(h);
+                    return r;
+                }
+                if (settleMs > 0) Thread.Sleep(settleMs);
+
+                if (!readQueued)
+                {
+                    var ovr2 = new OVERLAPPED { hEvent = ev };
+                    if (!ReadFile(h, buf, buf.Length, IntPtr.Zero, ref ovr2) &&
+                        Marshal.GetLastWin32Error() != ERROR_IO_PENDING)
+                        return r;
+                    if (WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                    {
+                        CancelIo(h);
+                        return r;
+                    }
+                    if (!GetOverlappedResult(h, ref ovr2, out int g2, false) || g2 <= 0)
+                        return r;
+                    if (g2 < buf.Length) Array.Resize(ref buf, g2);
+                    r.Response = buf;
+                    return r;
+                }
+
+                if (WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                {
+                    CancelIo(h);
+                    return r;
+                }
+                if (!GetOverlappedResult(h, ref ovr, out int got, false) || got <= 0)
+                    return r;
+                if (got < buf.Length) Array.Resize(ref buf, got);
+                r.Response = buf;
+                return r;
+            }
+            finally { CloseHandle(ev); }
+        }
+    }
+
+    /// <summary>控制端点往返，同时报告写是否成功。</summary>
+    public static WriteResult ProbeControlRoundTrip(string path, byte[] frame,
+                                                    int readLength, int settleMs)
+    {
+        var r = new WriteResult();
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, false);
+        if (h.IsInvalid) { r.WriteError = Marshal.GetLastWin32Error(); return r; }
+        using (h)
+        {
+            if (!HidD_SetOutputReport(h, frame, frame.Length))
+            {
+                r.WriteError = Marshal.GetLastWin32Error();
+                return r;
+            }
+            r.WriteOk = true;
+            if (settleMs > 0) Thread.Sleep(settleMs);
+
+            var buf = new byte[readLength];
+            buf[0] = frame.Length > 0 ? frame[0] : (byte)0;
+            r.Response = HidD_GetInputReport(h, buf, buf.Length) ? buf : null;
+        }
+        return r;
+    }
+
+    /// <summary>
+    /// 一次交换的结果：发出的帧、按顺序收到的所有报告、以及首个写错误。
+    /// </summary>
+    public sealed class ExchangeResult
+    {
+        public bool WriteOk = true;
+        public int WriteError;
+        public List<byte[]> Reports = new();
+        public string Describe()
+        {
+            if (!WriteOk) return $"写失败 (Win32 错误 {WriteError})";
+            return Reports.Count == 0
+                ? "写成功，未收到任何报告"
+                : $"写成功，收到 {Reports.Count} 个报告";
+        }
+    }
+
+    /// <summary>
+    /// **连续读取 + 批量发送**的一次完整交换。
+    ///
+    /// 这是 WebHID 的真实行为模型：驱动打开设备后持续接收 inputreport 事件，
+    /// 期间穿插多次 sendReport。此前每个探针都是「开句柄 → 写一帧 → 读一次 → 关句柄」，
+    /// 于是上一帧的应答会被下一帧的读请求收走（实测：帧长 32 的四路探针全部超时，
+    /// 紧接着帧长 64 的探针却收到了属于前一帧的 `04 05 00 FF ...`），
+    /// 既丢应答又误判归属。
+    ///
+    /// 本方法在一次句柄生命周期内：逐帧写 <paramref name="frames"/>，每写完一帧
+    /// 就把到达的报告排空，全部发完后再等 <paramref name="drainMs"/> 毫秒接住迟到的报告。
+    /// 任何写失败都记在 <see cref="ExchangeResult.WriteError"/>，不再与「读超时」混为一谈。
+    /// </summary>
+    public static ExchangeResult ProbeDrain(string path, IReadOnlyList<byte[]> frames,
+                                            int readLength, int settleMs, int drainMs,
+                                            bool writeViaControl = false)
+    {
+        var result = new ExchangeResult();
+        if (readLength <= 0) { result.WriteOk = false; result.WriteError = -1; return result; }
+
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, true);
+        if (h.IsInvalid)
+        {
+            result.WriteOk = false;
+            result.WriteError = Marshal.GetLastWin32Error();
+            return result;
+        }
+
+        using (h)
+        {
+            IntPtr ev = CreateEvent(IntPtr.Zero, true, false, IntPtr.Zero);
+            if (ev == IntPtr.Zero)
+            {
+                result.WriteOk = false;
+                result.WriteError = Marshal.GetLastWin32Error();
+                return result;
+            }
+            try
+            {
+                for (int i = 0; i < frames.Count; i++)
+                {
+                    var frame = frames[i];
+
+                    if (writeViaControl)
+                    {
+                        if (!HidD_SetOutputReport(h, frame, frame.Length))
+                        {
+                            result.WriteOk = false;
+                            result.WriteError = Marshal.GetLastWin32Error();
+                            return result;
+                        }
+                    }
+                    else
+                    {
+                        var ovw = new OVERLAPPED { hEvent = ev };
+                        bool wrote = WriteFile(h, frame, frame.Length, IntPtr.Zero, ref ovw);
+                        int werr = Marshal.GetLastWin32Error();
+                        if (!wrote && werr == ERROR_IO_PENDING)
+                            wrote = WaitForSingleObject(ev, 500) == 0 &&
+                                    GetOverlappedResult(h, ref ovw, out _, false);
+                        ResetEvent(ev);
+                        if (!wrote)
+                        {
+                            result.WriteOk = false;
+                            result.WriteError = werr;
+                            return result;
+                        }
+                    }
+
+                    if (settleMs > 0) Thread.Sleep(settleMs);
+
+                    // 写完就把它之后到达的报告收干净，避免串到下一帧
+                    Drain(h, ev, readLength, result.Reports, drainMs);
+                }
+
+                // 帧发完后继续等一会儿，接住迟到的报告
+                Drain(h, ev, readLength, result.Reports, drainMs);
+                return result;
+            }
+            finally { CloseHandle(ev); }
+        }
+    }
+
+    /// <summary>
+    /// **连续后台读取 + 连发**的一次完整交换，用于复现浏览器的真实时序。
+    ///
+    /// 抓包记录显示驱动的 34 帧全部落在同一秒内（时间戳只有秒级精度，
+    /// 34 帧同秒 = 背靠背连发）。而 <see cref="ProbeDrain"/> 每帧要
+    /// <c>settleMs + drainMs</c>，17 帧就要 5.4 秒 —— 设备很可能因为
+    /// 会话超时而拒绝后续命令（载荷 [2]=0xFF）。
+    ///
+    /// 本方法先用一个后台线程挂上连续的异步读，再以
+    /// <paramref name="gapMs"/> 的间隔把帧连发出去，最后再等
+    /// <paramref name="afterMs"/> 毫秒收尾。读线程全程不停，因此不会
+    /// 漏掉任一帧的应答。
+    /// </summary>
+    public static ExchangeResult ProbeBurst(string path, IReadOnlyList<byte[]> frames,
+                                            int readLength, int gapMs, int afterMs,
+                                            bool writeViaControl = false)
+    {
+        var result = new ExchangeResult();
+        if (readLength <= 0) { result.WriteOk = false; result.WriteError = -1; return result; }
+
+        var h = Open(path, GENERIC_READ | GENERIC_WRITE, true);
+        if (h.IsInvalid)
+        {
+            result.WriteOk = false;
+            result.WriteError = Marshal.GetLastWin32Error();
+            return result;
+        }
+
+        using (h)
+        {
+            var stop = false;
+            IntPtr readEv = CreateEvent(IntPtr.Zero, true, false, IntPtr.Zero);
+            var reader = new Thread(() =>
+            {
+                while (!Volatile.Read(ref stop))
+                    Drain(h, readEv, readLength, result.Reports, 30);
+            })
+            { IsBackground = true };
+            reader.Start();
+
+            IntPtr ev = CreateEvent(IntPtr.Zero, true, false, IntPtr.Zero);
+            try
+            {
+                for (int i = 0; i < frames.Count; i++)
+                {
+                    var frame = frames[i];
+
+                    if (writeViaControl)
+                    {
+                        if (!HidD_SetOutputReport(h, frame, frame.Length))
+                        {
+                            result.WriteOk = false;
+                            result.WriteError = Marshal.GetLastWin32Error();
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        var ovw = new OVERLAPPED { hEvent = ev };
+                        bool wrote = WriteFile(h, frame, frame.Length, IntPtr.Zero, ref ovw);
+                        int werr = Marshal.GetLastWin32Error();
+                        if (!wrote && werr == ERROR_IO_PENDING)
+                            wrote = WaitForSingleObject(ev, 500) == 0 &&
+                                    GetOverlappedResult(h, ref ovw, out _, false);
+                        ResetEvent(ev);
+                        if (!wrote)
+                        {
+                            result.WriteOk = false;
+                            result.WriteError = werr;
+                            break;
+                        }
+                    }
+
+                    if (gapMs > 0) Thread.Sleep(gapMs);
+                }
+
+                if (afterMs > 0) Thread.Sleep(afterMs);
+                return result;
+            }
+            finally
+            {
+                Volatile.Write(ref stop, true);
+                CloseHandle(ev);
+                reader.Join(500);
+                CloseHandle(readEv);
+            }
+        }
+    }
+
+    /// <summary>在 <paramref name="totalMs"/> 内把所有到达的报告追加到 <paramref name="into"/>。</summary>
+    private static void Drain(SafeFileHandle h, IntPtr ev, int readLength,
+                              List<byte[]> into, int totalMs)
+    {
+        var deadline = Environment.TickCount64 + totalMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            int left = (int)(deadline - Environment.TickCount64);
+            if (left <= 0) break;
+
+            var buf = new byte[readLength];
+            var ov = new OVERLAPPED { hEvent = ev };
+            bool pending = ReadFile(h, buf, buf.Length, IntPtr.Zero, ref ov);
+            if (!pending && Marshal.GetLastWin32Error() != ERROR_IO_PENDING) return;
+
+            if (WaitForSingleObject(ev, (uint)left) != 0)
+            {
+                CancelIo(h);
+                ResetEvent(ev);
+                return;
+            }
+            if (!GetOverlappedResult(h, ref ov, out int got, false) || got <= 0)
+            {
+                ResetEvent(ev);
+                return;
+            }
+            ResetEvent(ev);
+            if (got < buf.Length) Array.Resize(ref buf, got);
+            into.Add(buf);
+        }
+    }
+
+    /// <summary>
+    /// 在指定接口上被动监听一帧输入报告（不发送任何请求）。
+    /// </summary>
     public static byte[]? Listen(string path, int readLength, int timeoutMs)
     {
         if (readLength <= 0) return null;

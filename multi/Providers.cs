@@ -343,8 +343,11 @@ public sealed class MchoseProvider : IBatteryProvider
 /// 因此这里不硬编码，而是先从接口能力推断，再依次尝试若干候选 ID，
 /// 哪种形态真的解析出合理电量就采用哪种，并在 Source 里标注。
 ///
-/// 本机实测：该键盘对所有已尝试的组合均无有效应答（详见 README），
-/// 因此读不到时会如实显示为离线。
+/// 此外还有一套 **Z87 系列键盘**专用协议（WebHID 抓包实证，本机实测可用）：
+///   64 字节中断写，[0]=报告号 4、[1]=序号、[3]=命令码；
+///   电量命令 0x1A 必须跟在固定 17 帧前导之后才被接受。
+/// 详见 <see cref="Protocols.BuildAtkKbdSequence"/>。
+/// 这套协议优先尝试：它是唯一在本机拿真机验证过的路径。
 /// </summary>
 public sealed class AtkProvider : IBatteryProvider
 {
@@ -377,17 +380,32 @@ public sealed class AtkProvider : IBatteryProvider
             .Select(c => c.ProductName)
             .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? "ATK 设备";
 
-        // 同一物理设备可能有多个接口暴露同样的数据，按物理键去重，
-        // 否则界面上会出现重复条目
-        var seen = new HashSet<string>();
+        // 同一把键盘会暴露十几个 HID 接口（键盘、多媒体键、厂商自定义…），
+        // 只有一个能读电量。**必须先逐个接口试读、再按物理键去重** ——
+        // 早先反过来（先去重、再试读）时，去重留下的恰好是第一个
+        // `UP=0x0001 IN=9 OUT=2` 的键盘接口，于是永远试不到真正的
+        // 承载接口 `UP=0xFF1C IN=64 OUT=64`，键盘恒显示 `--`。
+        //
+        // 排序只是加速：输出/输入报告越大越可能是厂商自定义接口。
+        var groups = candidates
+            .GroupBy(Hid.PhysicalKey)
+            .ToList();
 
-        foreach (var d in candidates)
+        foreach (var g in groups)
         {
-            string physical = Hid.PhysicalKey(d);
-            if (!seen.Add(physical)) continue;
+            var ordered = g
+                .OrderByDescending(x => x.OutputLength + x.InputLength)
+                .ToList();
 
-            var reading = TryRead(d, name);
-            list.Add(reading);
+            DeviceReading? first = null;
+            foreach (var d in ordered)
+            {
+                var reading = TryRead(d, name);
+                first ??= reading;
+                if (reading.IsOnline) { first = reading; break; }
+            }
+
+            if (first != null) list.Add(first);
         }
 
         return list;
@@ -396,6 +414,14 @@ public sealed class AtkProvider : IBatteryProvider
     private DeviceReading TryRead(Hid.HidInterface d, string name)
     {
         string key = "atk:" + Hid.PhysicalKey(d);
+
+        // ── 优先试 Z87 系列键盘协议（本机唯一验证成功的路径）──
+        if (d.OutputLength >= Protocols.AtkKbdFrameLength &&
+            d.InputLength >= Protocols.AtkKbdFrameLength)
+        {
+            var kbd = TryReadZ87Keyboard(d, name, key);
+            if (kbd != null) return kbd;
+        }
 
         // 优先走 17 字节特征报告（协议 1）：最轻量，且公开实现首选它
         if (d.FeatureLength >= Protocols.AtkProtocol1Length)
@@ -477,6 +503,44 @@ public sealed class AtkProvider : IBatteryProvider
         var off = DeviceReading.Offline(name, GuessKind(name), "ATK");
         off.Key = key;
         return off;
+    }
+
+    /// <summary>
+    /// Z87 系列键盘：64 字节中断写 + 固定 17 帧前导，电量为前导之后那一帧
+    /// 0x1A 的应答（实测 100% / 充电中）。
+    ///
+    /// 为什么必须连发整轮：单发那一帧 0x1A 时设备会把命令字节回成 0xFF
+    /// （驱动源码里 0xFF 是明确的错误返回），只有走完前导才被受理。
+    ///
+    /// 时序取抓包形态（34 帧落在一秒内 => gapMs 12），收尾留 300ms 接住
+    /// 迟到的应答。失败返回 null，由调用方继续试旧协议。
+    /// </summary>
+    private static DeviceReading? TryReadZ87Keyboard(Hid.HidInterface d, string name, string key)
+    {
+        var frames = Protocols.BuildAtkKbdSequence();
+        var ex = Hid.ProbeBurst(d.Path, frames, d.InputLength, gapMs: 12, afterMs: 300);
+        if (!ex.WriteOk) return null;
+
+        // 应答可能以任意顺序到达，且前导帧的应答也满足长度要求，
+        // 因此逐条用解析器筛：只有命令码对得上 0x1A 的才是电量帧。
+        foreach (var rep in ex.Reports)
+        {
+            if (!Protocols.TryParseAtkKbdPower(rep, out int pct, out bool charging)) continue;
+
+            return new DeviceReading
+            {
+                Name = name,
+                Percent = pct,
+                Kind = GuessKind(name),
+                IsCharging = charging,
+                IsOnline = true,
+                StatusText = charging ? "充电中" : Protocols.LevelText(pct),
+                Source = "ATK Z87 键盘",
+                Key = key,
+            };
+        }
+
+        return null;
     }
 
     /// <summary>

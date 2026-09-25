@@ -36,6 +36,8 @@ public static class ProtocolTests
         TestAtk1();
         TestAtk2();
         TestEchoRejection();
+        TestAtkKeyboard();
+        TestAtkKeyboardSequence();
         TestLevelText();
         TestNotifyDedup();
 
@@ -306,6 +308,133 @@ public static class ProtocolTests
             if (sent[i] != received[i]) return false;
         }
         return true;
+    }
+
+    // ───────────── ATK Z87 键盘 ─────────────
+
+    /// <summary>
+    /// 用抓包实录的字节验证 Z87 键盘协议。
+    ///
+    /// 真机实测的唯一成功样本（`--diag-atk` 实录，64 字节中的前 10 字节）：
+    ///     04 11 00 1A 00 00 00 00 64 02 …
+    /// 索引       0  1  2  3  4  5  6  7  8  9
+    /// 首字节 0x04 等于 Report ID，故载荷整体后移一位（b=1）：
+    ///   [b+2]=[3]=0x1A 命令码 ✓   [b+7]=[8]=0x64(100) 电量   [b+8]=[9]=0x02 状态
+    /// </summary>
+    private static void TestAtkKeyboard()
+    {
+        Console.WriteLine("\n[ATK Z87 键盘]");
+
+        // 真机实录样本：按抓包逐字节构造，不做任何「看起来合理」的假设
+        var real = new byte[64];
+        real[0] = 0x04; real[1] = 0x11; real[2] = 0x00; real[3] = 0x1A;
+        real[8] = 0x64; real[9] = 0x02;
+
+        Check("真机样本应解析成功", Protocols.TryParseAtkKbdPower(real, out int p, out bool chg));
+        CheckEq("真机样本电量", p, 100);
+        CheckEq("真机样本状态", chg, true);
+
+        // 缓冲区首字节被驱动剥掉（无 Report ID）时也应能解析：b=0
+        var noRid = new byte[63];
+        Array.Copy(real, 1, noRid, 0, 63);
+        Check("无 Report ID 前缀也应解析",
+            Protocols.TryParseAtkKbdPower(noRid, out int p2, out _));
+        CheckEq("无 Report ID 前缀电量", p2, 100);
+
+        // 放电态：[b+8]==0 不得标成充电中
+        var discharging = (byte[])real.Clone();
+        discharging[9] = 0x00;
+        Check("放电态应解析成功",
+            Protocols.TryParseAtkKbdPower(discharging, out int p3, out bool chg3));
+        CheckEq("放电态电量", p3, 100);
+        CheckEq("放电态不应标充电", chg3, false);
+
+        // 命令码不符：设备拒绝命令时会把 [2] 回成 0xFF（驱动源码里 0xFF = error）
+        var rejected = (byte[])real.Clone();
+        rejected[3] = 0xFF;
+        Check("命令码 0xFF 应拒绝", !Protocols.TryParseAtkKbdPower(rejected, out _, out _));
+
+        // 前导帧的应答（命令码 0x1B）不应被当成电量帧。
+        // 实测 LED 帧应答：04 01 00 1B 18 00 00 00 00 01 … → [8]=0x00 [9]=0x01
+        var ledFrame = new byte[64];
+        ledFrame[0] = 0x04; ledFrame[1] = 0x01; ledFrame[3] = 0x1B;
+        ledFrame[4] = 0x18; ledFrame[9] = 0x01;
+        Check("LED 前导帧不应被当成电量",
+            !Protocols.TryParseAtkKbdPower(ledFrame, out _, out _));
+
+        // 边界：0% 视为无效（未充上电的设备不会报 0）
+        var zero = (byte[])real.Clone();
+        zero[8] = 0x00;
+        Check("电量 0 应视为无效", !Protocols.TryParseAtkKbdPower(zero, out _, out _));
+
+        // 越界截断
+        var over = (byte[])real.Clone();
+        over[8] = 0xFF;
+        Check("越界电量应解析但截断为 100",
+            Protocols.TryParseAtkKbdPower(over, out int p4, out _));
+        CheckEq("越界电量截断值", p4, 100);
+
+        // 长度不足与 null
+        Check("长度 8 应拒绝", !Protocols.TryParseAtkKbdPower(new byte[8], out _, out _));
+        Check("null 应拒绝", !Protocols.TryParseAtkKbdPower(null, out _, out _));
+    }
+
+    /// <summary>
+    /// 验证 17 帧前导序列复现抓包。
+    ///
+    /// 抓包实录（每条载荷首 3 字节）：
+    ///   01 00 1b / 02 00 1b / … 0e 00 1b / 0f 00 03 / 10 00 03 / 11 00 1a
+    /// LED 帧 [4..5] 为 16 位小端偏移，逐帧 +0x18。
+    /// </summary>
+    private static void TestAtkKeyboardSequence()
+    {
+        Console.WriteLine("\n[ATK Z87 前导序列]");
+
+        var frames = Protocols.BuildAtkKbdSequence();
+
+        CheckEq("帧数应为 17", frames.Count, 17);
+        CheckEq("帧长应为 64", frames[0].Length, Protocols.AtkKbdFrameLength);
+
+        // 序号：1..17 全局递增
+        for (int i = 0; i < frames.Count; i++)
+            CheckEq($"第 {i + 1} 帧序号", frames[i][1], (byte)(i + 1));
+
+        // 报告号恒为 4，[2] 恒为 0
+        Check("报告号恒为 4", frames.All(f => f[0] == 4));
+        Check("保留字节恒为 0", frames.All(f => f[2] == 0x00));
+
+        // 前 14 帧是 LED 矩阵，命令码 0x1B，偏移逐帧 +0x18
+        for (int i = 0; i < 14; i++)
+        {
+            var f = frames[i];
+            CheckEq($"LED 帧 {i + 1} 命令码", f[3], (byte)0x1B);
+            CheckEq($"LED 帧 {i + 1} [4]", f[4], (byte)0x18);
+            int offset = i * 0x18;
+            int got = f[5] | (f[6] << 8);
+            CheckEq($"LED 帧 {i + 1} 偏移", got, offset);
+        }
+
+        // 抓包逐字核对关键帧
+        CheckEq("第 1 帧载荷 [2..4]", $"00 {frames[0][3]:X2} {frames[0][4]:X2}", "00 1B 18");
+        CheckEq("第 2 帧偏移", frames[1][5], (byte)0x18);
+        CheckEq("第 14 帧偏移低字节", frames[13][5], (byte)0x38);
+        CheckEq("第 14 帧偏移高字节", frames[13][6], (byte)0x01);
+
+        // 第 15/16 帧是键盘信息（cmd 0x03）
+        CheckEq("第 15 帧命令码", frames[14][3], (byte)0x03);
+        CheckEq("第 15 帧 [4]", frames[14][4], (byte)0x18);
+        CheckEq("第 16 帧命令码", frames[15][3], (byte)0x03);
+        CheckEq("第 16 帧 [4]", frames[15][4], (byte)0x0E);
+        CheckEq("第 16 帧 [5]", frames[15][5], (byte)0x18);
+
+        // 最后一帧才是电量命令
+        CheckEq("末帧命令码", frames[16][3], Protocols.AtkKbdPowerCmd);
+
+        // 自定义帧长（诊断用 32）也应成立
+        var thin = Protocols.BuildAtkKbdSequence(32);
+        CheckEq("自定义帧长帧数", thin.Count, 17);
+        CheckEq("自定义帧长", thin[0].Length, 32);
+        CheckEq("自定义帧长末帧命令码", thin[16][3], Protocols.AtkKbdPowerCmd);
     }
 
     // ───────────── 档位文案 ─────────────
