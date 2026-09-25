@@ -126,19 +126,31 @@ public static class ProtocolTests
             new byte[] { 0x55, 0x65, 50 }, out _, out _));
         Check("null 应拒绝", !Protocols.TryParseMchose(null, out _, out _));
 
-        // 状态码映射：**刻意不下结论**。
+        // 状态码映射：**基于真机双向采样**，不是猜测。
         //
-        // 真机实测（--diag-mchose watch，用户明确在放电使用）：响应 [3] 恒为 0x02。
-        // 旧的「2 → 充电中」映射因此确定是错的，界面曾一直显示「充电中」。
-        // 上游参考实现同样只记录不解释这个字节。一个字节只观测到一个取值，
-        // 不足以断定任何含义，所以现在一律返回空文案 + charging=false。
+        // 采样证据（--diag-mchose watch）：
+        //   插上充电器、电量 30%，连续 6 次  → [3]=0x00
+        //   明确放电使用，连续 15+ 次        → [3]=0x02
         //
-        // 将来若采到充电态样本，把这里的断言改成真实映射即可。
-        foreach (byte st in new byte[] { 0, 1, 2, 3, 9, 0xFF })
+        // 历史教训：旧映射把 1/2 当归零为「充电中」、3 当「已充满」，
+        // 是照抄上游后凭字面猜的，**两个方向都错了** —— 真实的 0x02 是放电，
+        // 界面因此在用户一直放电时永远显示「充电中」。
+        CheckEq("充电态文案", Protocols.MchoseStatusText(0x00).text, "充电中");
+        Check("充电态判为充电", Protocols.MchoseStatusText(0x00).charging);
+        CheckEq("放电态文案", Protocols.MchoseStatusText(0x02).text, "放电中");
+        Check("放电态不判为充电", !Protocols.MchoseStatusText(0x02).charging);
+
+        // 常量与映射必须一致（防止将来只改一处）
+        CheckEq("充电常量", Protocols.MchoseStatusCharging, (byte)0x00);
+        CheckEq("放电常量", Protocols.MchoseStatusDischarging, (byte)0x02);
+
+        // 未观测到的取值一律不下结论，由界面显示「状态未知」。
+        // 尤其 0x01/0x03：旧猜测把 3 当「已充满」，无任何依据。
+        foreach (byte st in new byte[] { 1, 3, 4, 9, 0xFF })
         {
             var (text, charging) = Protocols.MchoseStatusText(st);
-            CheckEq($"状态{st} 不给出文案", text, "");
-            Check($"状态{st} 不判为充电", !charging);
+            CheckEq($"未观测状态{st} 不给出文案", text, "");
+            Check($"未观测状态{st} 不判为充电", !charging);
         }
     }
 

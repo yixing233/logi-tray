@@ -6,15 +6,14 @@ namespace MultiTray;
 /// <summary>
 /// 各品牌电量协议的**纯解析层**：只做字节到电量/状态的换算，不碰任何 I/O。
 ///
-/// 这样拆分的原因是本机无法用真机验证任何一条厂商协议（三台设备对私有帧
-/// 都不应答，详见 README 的记录）。纯函数可以脱离硬件，用合成帧做穷尽的
-/// 单元测试，至少保证「解析逻辑本身是对的」，而不是让整条链路都处于
-/// 「没测过」的状态。
+/// 拆分出这一层，是为了让协议逻辑脱离硬件就能被穷尽测试：把真机采到的帧
+/// 固化成断言，任何改动一旦解析错位都会立刻在 `--test-protocols` 里暴露，
+/// 而不是等到界面上显示一个错的电量。
 ///
-/// 协议来源（均为公开实现，非猜测）：
+/// 协议来源（均为公开实现或官方驱动，非猜测）：
 ///   * 迈从 MCHOSE V9 Pro —— rafagfran/mchose-v9-pro-battery-tray
 ///       请求 64 字节 [0]=0x55 [1]=0x65 [2]=0x01
-///       响应 [0]=0x55 [1]=0x65 [2]=电量% [3]=状态码
+///       响应 [0]=0x55 [1]=0x65 [2]=电量% [3]=状态码（0x00 充电 / 0x02 放电，真机校准）
 ///   * ATK —— Fan4Metal/ATK_tray 的 models.py
 ///       协议1：17 字节特征报告，[0]=ReportID [1]=0x04 [16]=0x49，电量在 [6]
 ///       协议2：64 字节，[2]=0x72；无线 [1]=0x7D [5]=0x01，有线 [1]=0x7C [5]=0x00
@@ -27,6 +26,12 @@ public static class Protocols
 
     /// <summary>迈从请求帧的固定头。</summary>
     public static readonly byte[] MchoseRequestHeader = { 0x55, 0x65, 0x01 };
+
+    /// <summary>迈从状态字节：充电中（真机采样，插充电器时连续 6 次均为该值）。</summary>
+    public const byte MchoseStatusCharging = 0x00;
+
+    /// <summary>迈从状态字节：放电中（真机采样，明确放电使用时连续 15+ 次均为该值）。</summary>
+    public const byte MchoseStatusDischarging = 0x02;
 
     /// <summary>构造迈从电量请求帧（长度由接口的报告长度决定）。</summary>
     public static byte[] BuildMchoseRequest(int reportLength)
@@ -65,31 +70,38 @@ public static class Protocols
     }
 
     /// <summary>
-    /// 迈从状态字节（响应 [3]）——**刻意不做解释**。
+    /// 迈从状态字节（响应 [3]）→ 文案与充电标志。
     ///
-    /// 这里曾经把 1/2 映射为「充电中」、3 映射为「已充满」。那是**凭字面猜的**，
-    /// 从未拿真机校准过，而且已经证明是错的：
-    /// 耳机正在使用（放电）时 [3] 稳定为 `0x02`，界面因此永远显示「充电中」。
+    /// 映射依据是**真机双向采样**（`--diag-mchose watch`），不是照抄猜测：
+    ///
+    ///   | [3]  | 实测场景                             | 结论   |
+    ///   |------|--------------------------------------|--------|
+    ///   | 0x00 | 插上充电器后连续 6 次采样，电量 30%  | 充电中 |
+    ///   | 0x02 | 明确放电使用时连续 15+ 次采样        | 放电中 |
+    ///   | 其它 | **未观测到**                         | 未知   |
+    ///
+    /// 这里曾经把 1/2 映射为「充电中」、3 映射为「已充满」——那是**凭字面猜的**，
+    /// 从未校准，而且**两个方向都错了**：真实的 0x02 其实是放电，
+    /// 界面因此在用户一直放电使用时永远显示「充电中」。
     ///
     /// 上游参考实现（rafagfran/mchose-v9-pro-battery-tray，协议即取自它）
-    /// 对它同样只记录不解释：「Status byte 3 da resposta, registrado mas
-    /// NÃO interpretado」，理由是单一样本不足以断定它表示充电、使用还是别的。
-    /// 它的真机抓包也是 `55 65 14 02`（20%，[3]=0x02），与本机一致。
+    /// 至今仍只记录不解释这个字节（「registrado mas NÃO interpretado」），
+    /// 它自己的抓包 `55 65 14 02`（20%，[3]=0x02）也与我们一致。
     ///
-    /// 一个字节只观测到一个取值，既不能证明表示充电，也不能证明表示放电。
-    /// **宁可如实显示电量档位，也不给出一个确定错了的状态** ——
-    /// 虚假的「充电中」还会连带压掉低电量提醒（见 <see cref="ShouldNotify"/>）。
+    /// 尚未观测到 0x01、0x03（旧猜测里「已充满」用的就是 3，**无任何依据**）。
+    /// 对未观测到的取值一律返回空文案，由调用方按「状态未知」显示 ——
+    /// 宁可说不知道，也不再给出一个确定错了的状态：虚假的「充电中」还会
+    /// 连带压掉低电量提醒（见 <see cref="ShouldNotify"/>）。
     ///
-    /// 要恢复真实的充电状态显示，需要采到充电时的 [3] 取值：
-    /// 运行 `multi-tray.exe --diag-mchose watch`，插上充电器观察 [3] 的变化。
+    /// 要补上「已充满」这一档，请在满电时采样：`multi-tray.exe --diag-mchose watch`。
     /// </summary>
-    public static (string text, bool charging) MchoseStatusText(byte status)
+    public static (string text, bool charging) MchoseStatusText(byte status) => status switch
     {
-        // 参数保留是为了将来校准映射时不必改调用点；
-        // 在拿到充电态样本之前，一律不下结论。
-        _ = status;
-        return ("", false);
-    }
+        MchoseStatusCharging => ("充电中", true),
+        MchoseStatusDischarging => ("放电中", false),
+        // 未观测到的取值：不下结论（空文案即「状态未知」）
+        _ => ("", false),
+    };
 
     // ───────────────────────── ATK ─────────────────────────
 

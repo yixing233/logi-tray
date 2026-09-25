@@ -14,14 +14,14 @@ namespace MultiTray;
 /// 是**照抄上游实现后凭字面猜测**的（1/2 → 充电、3 → 充满），从未拿真机校准过。
 /// 电量字节对了，就默认状态字节也对了 —— 这是本次 bug 的根源。
 ///
-/// 本工具把每次轮询的**原始字节**按时间打印出来，用于确定：
-///   1. 放电时 [3] 到底是什么值；
-///   2. 插上充电器后 [3] 变成什么；
-///   3. 充满后又是什么。
-/// 只有把三种真实状态都采到，映射才谈得上正确。
+/// **已定案**（本工具采到双向样本后）：`[3]=0x00` 是充电、`[3]=0x02` 是放电，
+/// 旧映射两个方向都错了。本工具保留下来用于补采尚未观测到的取值（如满电）。
 ///
-/// 另一个待确认点：`[2]` 是否真的是「电量」。如果接口对同一请求返回的 [2]
-/// 会随充电变化，那么它可能并非纯电量，需要重新认定。
+/// 本工具把每次轮询的**原始字节**按时间打印出来。三个状态里已采到两个：
+///   1. 放电时 [3] = `0x02`（连续 15+ 次）；
+///   2. 充电时 [3] = `0x00`（连续 6 次，电量 30%）；
+///   3. 充满后是什么 —— **仍未观测到**。
+/// 顺带确认了 `[2]` 确实是纯电量：充电期间它稳定在同一数值，不因充电改义。
 ///
 /// 本工具**只读不写**，不改动任何协议实现。
 /// </summary>
@@ -57,7 +57,7 @@ internal static class MchoseDiagnostics
         }
 
         Console.WriteLine();
-        Console.WriteLine("字段位置： [0]=0x55 [1]=0x65 [2]=电量? [3]=状态? [4..]=未知");
+        Console.WriteLine("字段位置： [0]=0x55 [1]=0x65 [2]=电量% [3]=状态(0x00 充电 / 0x02 放电)");
         Console.WriteLine();
 
         int rounds = watch ? int.MaxValue : 1;
@@ -90,8 +90,8 @@ internal static class MchoseDiagnostics
                         var (text, charging) = Protocols.MchoseStatusText(st);
                         Console.WriteLine($"           解析：电量 {pct}%  状态字节 [3]=0x{st:X2}");
                         Console.WriteLine(string.IsNullOrEmpty(text)
-                            ? "           [3] 当前未做解释（映射尚未校准）→ 不判为充电"
-                            : $"           → 当前映射为「{text}」(charging={charging})");
+                            ? "           [3] 是未观测到的取值 → 显示「未知」，不下结论"
+                            : $"           → 映射为「{text}」(charging={charging})");
                     }
                     else
                     {
@@ -104,7 +104,8 @@ internal static class MchoseDiagnostics
             {
                 Console.WriteLine();
                 Console.WriteLine("持续采样中（每秒一次）。");
-                Console.WriteLine("请保持耳机在**放电**状态观察 [3]；然后插上充电器再观察一次。");
+                Console.WriteLine("已校准：放电 = 0x02，充电 = 0x00。");
+                Console.WriteLine("尚未观测到「已充满」档 —— 满电后请再采一次，看 [3] 是否变成新取值。");
                 Console.WriteLine("按 Ctrl+C 结束。");
                 Console.WriteLine();
             }
@@ -112,7 +113,7 @@ internal static class MchoseDiagnostics
 
         Console.WriteLine();
         Console.WriteLine(new string('=', 74));
-        Console.WriteLine("请把上面的原始输出反馈给作者，用于确定状态码的正确映射。");
+        Console.WriteLine("已校准：放电 0x02 / 充电 0x00。仍未观测「已充满」档。");
         return 0;
     }
 }

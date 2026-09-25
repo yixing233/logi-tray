@@ -32,6 +32,9 @@ __pycache__/
 /wpf_test/
 /_shots/
 
+# ---- multishot 离屏自检渲染出的截图（每次运行重新生成）----
+/card/
+
 # ---- ATK 抓包取证（本地一次性材料，含厂商驱动 bundle，不入库）----
 #   tools/capture_atk_hid.py 是抓包脚本本身，值得保留；
 #   下面这些是它抓下来的原始记录与站点资源。
