@@ -317,8 +317,13 @@ public sealed class MchoseProvider : IBatteryProvider
             Percent = pct,
             Kind = DeviceKind.Headset,
             IsCharging = charging,
+            // 状态字节未校准：既不声称充电，也不声称放电。
+            ChargeStateKnown = !string.IsNullOrEmpty(text),
             IsOnline = true,
-            StatusText = text,
+            // 状态字节尚未校准，MchoseStatusText 返回空串。
+            // 此时退回电量档位文案（如「一般」），至少是有依据的信息，
+            // 而不是一个确定错了的「充电中」。
+            StatusText = string.IsNullOrEmpty(text) ? Protocols.LevelText(pct) : text,
             Source = source,
             Key = key,
         };

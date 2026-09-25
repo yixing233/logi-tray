@@ -64,14 +64,32 @@ public static class Protocols
         return true;
     }
 
-    /// <summary>把迈从的状态码转成文案。1/2 为充电，3 为充满，其余按放电处理。</summary>
-    public static (string text, bool charging) MchoseStatusText(byte status) => status switch
+    /// <summary>
+    /// 迈从状态字节（响应 [3]）——**刻意不做解释**。
+    ///
+    /// 这里曾经把 1/2 映射为「充电中」、3 映射为「已充满」。那是**凭字面猜的**，
+    /// 从未拿真机校准过，而且已经证明是错的：
+    /// 耳机正在使用（放电）时 [3] 稳定为 `0x02`，界面因此永远显示「充电中」。
+    ///
+    /// 上游参考实现（rafagfran/mchose-v9-pro-battery-tray，协议即取自它）
+    /// 对它同样只记录不解释：「Status byte 3 da resposta, registrado mas
+    /// NÃO interpretado」，理由是单一样本不足以断定它表示充电、使用还是别的。
+    /// 它的真机抓包也是 `55 65 14 02`（20%，[3]=0x02），与本机一致。
+    ///
+    /// 一个字节只观测到一个取值，既不能证明表示充电，也不能证明表示放电。
+    /// **宁可如实显示电量档位，也不给出一个确定错了的状态** ——
+    /// 虚假的「充电中」还会连带压掉低电量提醒（见 <see cref="ShouldNotify"/>）。
+    ///
+    /// 要恢复真实的充电状态显示，需要采到充电时的 [3] 取值：
+    /// 运行 `multi-tray.exe --diag-mchose watch`，插上充电器观察 [3] 的变化。
+    /// </summary>
+    public static (string text, bool charging) MchoseStatusText(byte status)
     {
-        1 => ("充电中", true),
-        2 => ("充电中", true),
-        3 => ("已充满", true),
-        _ => ("放电中", false),
-    };
+        // 参数保留是为了将来校准映射时不必改调用点；
+        // 在拿到充电态样本之前，一律不下结论。
+        _ = status;
+        return ("", false);
+    }
 
     // ───────────────────────── ATK ─────────────────────────
 

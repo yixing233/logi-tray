@@ -381,6 +381,24 @@ internal static class Shot
                 Console.WriteLine($"  !! [{tag}] 卡片缺少电量 {expect}（{r.Name}）");
                 missing++;
             }
+
+            // 充电状态未知的设备（迈从耳机：状态字节尚未校准）必须如实标注，
+            // 且绝不能出现「正在充电」—— 那正是用户报告的 bug。
+            if (r.IsOnline && !r.ChargeStateKnown)
+            {
+                if (!found.Exists(t => t.Contains("充电状态未知", StringComparison.Ordinal)))
+                {
+                    Console.WriteLine(
+                        $"  !! [{tag}] {r.Name} 状态未知，卡片未显示「充电状态未知」");
+                    missing++;
+                }
+                if (found.Exists(t => t.Contains("正在充电", StringComparison.Ordinal)))
+                {
+                    Console.WriteLine(
+                        $"  !! [{tag}] {r.Name} 状态未知，卡片却显示「正在充电」");
+                    missing++;
+                }
+            }
         }
         Console.WriteLine(
             $"  [{tag}] 卡片设备 {readings.Count - missing}/{readings.Count} 完整");

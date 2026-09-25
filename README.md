@@ -154,6 +154,7 @@ WPF 的渲染栈在第一次显示窗口后就会常驻进程，这才是完整�
 ```bat
 multi-tray.exe --list             :: 列出检测到的设备与当前电量
 multi-tray.exe --diag-atk         :: 排查 ATK 设备（打印原始收发字节）
+multi-tray.exe --diag-mchose      :: 排查迈从耳机的状态字节（watch 模式每秒采样一次）
 multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件）
 ```
 
@@ -167,10 +168,22 @@ multi-tray.exe --test-protocols   :: 运行协议解析层自检（无需硬件�
 | 品牌 | 实现依据 | 实机验证 |
 | --- | --- | --- |
 | 罗技 | 本仓库 native 读取器（HID++ 2.0，5 条特性回退） | ✅ 53 项单测 + 实机 **81%，6/6 稳定** |
-| 迈从 MCHOSE | [rafagfran/mchose-v9-pro-battery-tray](https://github.com/rafagfran/mchose-v9-pro-battery-tray)（同型号 VID/PID） | ✅ 实机 **40%，6/6 稳定** |
+| 迈从 MCHOSE | [rafagfran/mchose-v9-pro-battery-tray](https://github.com/rafagfran/mchose-v9-pro-battery-tray)（同型号 VID/PID） | ✅ 电量实机 **30%，稳定**；⚠️ 充电状态未校准，显示「未知」 |
 | ATK Z87 键盘 | 官方网页驱动 hub.atk.pro v3.2.27 的 WebHID 抓包（非公开实现） | ✅ 实机 **100%，充电中** |
 
 罗技用 HID++ 2.0；迈从用 64 字节请求 `55 65 01`；ATK Z87 键盘用第三套协议。
+
+**迈从耳机只上报电量，不上报可解读的充电状态。** 它的响应第 4 字节
+（`[3]`）本工具**不做解释**：实机在明确放电使用的情况下该字节恒为 `0x02`，
+既不能断定表示充电，也不能断定表示放电，因此界面如实显示「充电状态未知」，
+而不是猜一个。上游参考实现（协议来源）对它同样"记录但不解释"。
+
+> 早先的版本把它按「1/2 → 充电中、3 → 已充满」解释，那是**照抄上游后凭字面猜的**，
+> 从未校准过。结果是耳机一直在放电、界面却始终显示「充电中」，
+> 并且这个虚假状态还会连带**压掉低电量提醒**。现已改为不下结论。
+>
+> 若要恢复真实状态显示，需要采到充电时的 `[3]` 取值：
+> 运行 `multi-tray.exe --diag-mchose watch`，插上充电器观察该字节的变化。
 
 **ATK Z87 键盘**走的是官方驱动的私有指令，与同品牌鼠标协议**完全不同**
 （旧实现误用了鼠标的 `GetBatteryLevel = 4`，因此一直读不到）。两个关键点：

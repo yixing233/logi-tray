@@ -126,16 +126,20 @@ public static class ProtocolTests
             new byte[] { 0x55, 0x65, 50 }, out _, out _));
         Check("null 应拒绝", !Protocols.TryParseMchose(null, out _, out _));
 
-        // 状态码映射
-        CheckEq("状态1文案", Protocols.MchoseStatusText(1).text, "充电中");
-        Check("状态1为充电", Protocols.MchoseStatusText(1).charging);
-        CheckEq("状态2文案", Protocols.MchoseStatusText(2).text, "充电中");
-        Check("状态2为充电", Protocols.MchoseStatusText(2).charging);
-        CheckEq("状态3文案", Protocols.MchoseStatusText(3).text, "已充满");
-        Check("状态3为充电", Protocols.MchoseStatusText(3).charging);
-        CheckEq("状态0文案", Protocols.MchoseStatusText(0).text, "放电中");
-        Check("状态0为放电", !Protocols.MchoseStatusText(0).charging);
-        CheckEq("状态9文案", Protocols.MchoseStatusText(9).text, "放电中");
+        // 状态码映射：**刻意不下结论**。
+        //
+        // 真机实测（--diag-mchose watch，用户明确在放电使用）：响应 [3] 恒为 0x02。
+        // 旧的「2 → 充电中」映射因此确定是错的，界面曾一直显示「充电中」。
+        // 上游参考实现同样只记录不解释这个字节。一个字节只观测到一个取值，
+        // 不足以断定任何含义，所以现在一律返回空文案 + charging=false。
+        //
+        // 将来若采到充电态样本，把这里的断言改成真实映射即可。
+        foreach (byte st in new byte[] { 0, 1, 2, 3, 9, 0xFF })
+        {
+            var (text, charging) = Protocols.MchoseStatusText(st);
+            CheckEq($"状态{st} 不给出文案", text, "");
+            Check($"状态{st} 不判为充电", !charging);
+        }
     }
 
     // ───────────── ATK 协议 1 ─────────────

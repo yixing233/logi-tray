@@ -27,6 +27,16 @@ public sealed class DeviceReading
     /// <summary>是否正在充电。</summary>
     public bool IsCharging { get; set; }
 
+    /// <summary>
+    /// 充电状态是否**已知**。默认 true（读到了可信的状态位）。
+    ///
+    /// 迈从耳机置为 false：它的状态字节（响应 [3]）尚未校准 ——
+    /// 放电时实测恒为 0x02，既不能断定表示充电，也不能断定表示放电。
+    /// 此时界面不应声称「正在充电」，也不应反过来声称「正常放电中」，
+    /// 而要如实说「充电状态未知」。
+    /// </summary>
+    public bool ChargeStateKnown { get; set; } = true;
+
     /// <summary>设备是否在线（已连接且能应答）。</summary>
     public bool IsOnline { get; set; }
 

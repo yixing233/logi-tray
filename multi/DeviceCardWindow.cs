@@ -256,8 +256,12 @@ public sealed class DeviceCardWindow : Window
     /// <summary>一台设备一个分组：标题 + 状态 + 电池图标 + 大号电量 + 进度条。</summary>
     private void AddDeviceGroup(DeviceReading r, bool hasPrevious)
     {
+        // 状态位未知时如实说「未知」：虚假的「正在充电」会误导用户，
+        // 而强行反过来显示「正常放电中」同样是没依据的断言。
+        // 见 DeviceReading.ChargeStateKnown（迈从耳机的状态字节尚未校准）。
         string state = r.IsOnline
-            ? (r.IsCharging ? "正在充电" : "正常放电中")
+            ? (!r.ChargeStateKnown ? "充电状态未知"
+               : (r.IsCharging ? "正在充电" : "正常放电中"))
             : "设备离线";
         string subtitle = r.IsOnline ? "已连接" : "已休眠";
 

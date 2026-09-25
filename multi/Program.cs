@@ -46,6 +46,8 @@ internal static class Program
                 case "--probe-proto1":
                 case "--probe-transport":
                     return AtkDiagnostics.Run();
+                case "--diag-mchose":
+                    return MchoseDiagnostics.Run(args.Length > 1 && args[1] == "watch");
                 case "--show-details":
                     return ShowDetailsOnce();
                 case "--show-settings":
@@ -121,6 +123,8 @@ internal static class Program
         Console.WriteLine("  multi-tray.exe                启动托盘程序");
         Console.WriteLine("  multi-tray.exe --list         列出检测到的设备与当前电量后退出");
         Console.WriteLine("  multi-tray.exe --diag-atk     诊断 ATK 设备（打印原始收发字节）");
+        Console.WriteLine("  multi-tray.exe --diag-mchose  诊断迈从设备（打印原始收发字节）");
+        Console.WriteLine("  multi-tray.exe --diag-mchose watch  持续采样，用于确认充电状态字节");
         Console.WriteLine("  multi-tray.exe --test-protocols  运行协议解析层自检（无需硬件）");
         Console.WriteLine("  multi-tray.exe --show-details    直接打开设备电量窗口");
         Console.WriteLine("  multi-tray.exe --show-settings   直接打开设置窗口");
