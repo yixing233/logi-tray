@@ -32,6 +32,14 @@ __pycache__/
 /wpf_test/
 /_shots/
 
+# ---- ATK 抓包取证（本地一次性材料，含厂商驱动 bundle，不入库）----
+#   tools/capture_atk_hid.py 是抓包脚本本身，值得保留；
+#   下面这些是它抓下来的原始记录与站点资源。
+/_atk/
+/_atk_hub.html
+/tools/_atk_*.jsonl
+/tools/_atk_*.py
+
 # ---- Native scratch files (keep build.bat, src/, README.md) ----
 /native/*.py
 /native/*.png
