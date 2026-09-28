@@ -28,7 +28,7 @@ import urllib.request
 
 REPO = "yixing233/logi-tray"
 # 默认操作的那次发布；发新版时改这里，或在命令行用第二个参数指定 tag。
-TAG = "v1.5.0"
+TAG = "v1.6.0"
 PROXY = "http://127.0.0.1:7890"
 
 # 退出码：0 = 成功（含「本来就是目标状态」），1 = 出错
@@ -135,8 +135,10 @@ def main(argv) -> int:
         print(f"\n已经是{'草稿' if target_draft else '公开'}，无需改动。")
         return 0
 
+    # 必须带上 tag_name：草稿的 tag_name 是 `untagged-<hash>` 占位串，只改 draft
+    # 会把占位串原样留在发布页上（v1.5.0 就是这么挂到哈希地址上的）。
     code, updated = api("PATCH", f"/repos/{REPO}/releases/{rel['id']}",
-                        {"draft": target_draft, "prerelease": False})
+                        {"draft": target_draft, "prerelease": False, "tag_name": tag})
     if code != 200:
         print(f"\n切换失败（目标 {'草稿' if target_draft else '公开'}）:", code, updated)
         return 1

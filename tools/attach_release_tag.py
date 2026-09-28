@@ -22,7 +22,7 @@ import urllib.request
 
 REPO = "yixing233/logi-tray"
 PROXY = "http://127.0.0.1:7890"
-EXPECTED = "v1.5.0"
+EXPECTED = "v1.6.0"
 # 待修的 release：草稿占位 tag 在发布后才看得出，用 release id 定位最稳妥。
 RELEASE_ID = 0
 

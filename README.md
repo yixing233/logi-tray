@@ -106,9 +106,9 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 
 | 版本 | 文件 | 内存占用（空闲） | 适合 |
 | --- | --- | --- | --- |
-| **完整版** | `logi-tray-v1.2.2.zip`（约 1.4 MB） | 工作集约 63 MB / 提交约 15 MB | 想要亚克力毛玻璃、三种图标样式与主题切换 |
-| **轻量版** | `logi-tray-lite-v1.2.1.zip`（约 0.9 MB） | 工作集约 51 MB / 提交约 12 MB | 只要电量数字，希望占用尽可能低 |
-| **多品牌版** | `multi-tray-v1.2.1.zip`（约 0.7 MB） | 工作集约 61 MB / 提交约 15 MB | 有键盘/鼠标/耳机等多台不同品牌设备 |
+| **完整版** | `logi-tray-v1.2.3.zip`（约 1.4 MB） | 工作集约 63 MB / 提交约 15 MB | 想要亚克力毛玻璃、三种图标样式与主题切换 |
+| **轻量版** | `logi-tray-lite-v1.2.2.zip`（约 0.9 MB） | 工作集约 51 MB / 提交约 12 MB | 只要电量数字，希望占用尽可能低 |
+| **多品牌版** | `multi-tray-v1.2.2.zip`（约 0.7 MB） | 工作集约 61 MB / 提交约 15 MB | 有键盘/鼠标/耳机等多台不同品牌设备 |
 
 > 上表是**实测空闲值**（启动后不打开任何窗口，等待 9 秒稳定）。多品牌版自 v1.1.0 起
 > 改用与完整版相同的 WPF 亚克力外观层，因此不再有「47 MB」那样的轻量优势；
@@ -122,7 +122,7 @@ logi-tray 基于 .NET 8 构建，需要微软官方**免费**的桌面运行时�
 > `%LOCALAPPDATA%\logi-tray`、`%LOCALAPPDATA%\logi-tray-lite` 与 `%LOCALAPPDATA%\multi-tray`，互不干扰。
 
 > **三个版本各自独立编号。** 一次发布里 tag 是统一的（如 `v1.4.0`），但三个包的版本号
-> 各自演进，可能互不相同（上表即为 `1.2.2` / `1.2.1` / `1.2.1`）。因此应用内的
+> 各自演进，可能互不相同（上表即为 `1.2.3` / `1.2.2` / `1.2.2`）。因此应用内的
 > **「检查更新」比的是你自己那一版的最新包**（按文件名前缀解析，例如多品牌版看
 > `multi-tray-v*.zip`），而不是 release 的 tag —— 否则从 `v1.4.0` 下载到的 `1.2.1`
 > 会被永远提示「发现新版本」，点「是」又下载回同一个包。
@@ -358,10 +358,15 @@ python tools/package_release.py
 `logi-tray-lite-vX.Y.Z.zip` 与 `multi-tray-vX.Y.Z.zip`，各自附带独立的
 `一键安装.bat` / `卸载.bat` / `使用说明.txt`。版本号取自各自的 `.csproj`。
 
-上传到 GitHub 由 `tools/release_v150.py` 负责（与发布说明配套，改名沿用上一次的
+上传到 GitHub 由 `tools/release_v160.py` 负责（与发布说明配套，改名沿用上一次的
 `release_v*.py` 即可）：先建**草稿**并核对资产，再加 `--publish` 转公开，
 最后用 `python tools/readme_vs_latest.py` 对账 README 承诺的文件名与
 `/releases/latest` 页面上实际能下到的文件。
+
+> 转公开时脚本会连 `tag_name` 一起写回。草稿在 GitHub 上的 tag 是
+> `untagged-<hash>` 占位串，只改 `draft` 会把发布页永久留在那个哈希地址上
+> （v1.5.0 就踩过这个坑，`/releases/tag/v1.5.0` 因此打不开）。若已经挂错，
+> 用 `python tools/attach_release_tag.py --fix` 改挂。
 
 ---
 
