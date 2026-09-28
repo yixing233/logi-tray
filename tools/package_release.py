@@ -1,14 +1,18 @@
-"""Package both editions of logi-tray into release zips.
+"""Package all editions of logi-tray into release zips.
 
 Usage:
     python tools/package_release.py
 
-Produces two independent archives so users pick the edition they want:
+Produces three independent archives so users pick the edition they want:
     release/logi-tray-vX.Y.Z.zip        full edition (WPF + acrylic, 3 icon styles)
     release/logi-tray-lite-vX.Y.Z.zip   lightweight edition (WinForms, number icon)
+    release/multi-tray-vX.Y.Z.zip       multi-brand edition (Logitech / MCHOSE / ATK)
 
 Each archive gets its own installer, uninstaller and readme, generated from the
-templates below so the two cannot drift apart.
+templates below so the three cannot drift apart.
+
+版本号取自各自的 csproj（三者独立编号，互不相同），发布脚本再按这些名字
+去 release/ 取包上传 —— 所以改了 csproj 的 <Version> 就必须重跑本脚本。
 """
 import os
 import re

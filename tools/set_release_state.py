@@ -3,9 +3,10 @@
 """查看 / 切换某个 release 的公开状态（草稿 ⇄ 公开）。
 
 用法：
-    python tools/set_release_state.py                 # 只看当前状态
-    python tools/set_release_state.py draft           # 转为草稿（未发布）
-    python tools/set_release_state.py publish         # 转为公开
+    python tools/set_release_state.py                      # 只看当前发布的当前状态
+    python tools/set_release_state.py draft                # 转为草稿（未发布）
+    python tools/set_release_state.py publish              # 转为公开
+    python tools/set_release_state.py draft   v1.4.0       # 指定 tag
 
 为什么需要它：三个版本的版本号各自独立，发布是个手动动作，而
 「代码改完了但还没在自己机器上试过」是常态。草稿状态正好对应这个阶段 ——
@@ -26,11 +27,12 @@ import urllib.error
 import urllib.request
 
 REPO = "yixing233/logi-tray"
-TAG = "v1.4.0"
+# 默认操作的那次发布；发新版时改这里，或在命令行用第二个参数指定 tag。
+TAG = "v1.5.0"
 PROXY = "http://127.0.0.1:7890"
 
 # 退出码：0 = 成功（含「本来就是目标状态」），1 = 出错
-USAGE = "用法: python tools/set_release_state.py [draft|publish]"
+USAGE = "用法: python tools/set_release_state.py [draft|publish] [tag]"
 
 
 def token() -> str:
@@ -95,13 +97,14 @@ def main(argv) -> int:
     if want not in (None, "draft", "publish"):
         print(USAGE)
         return 1
+    tag = argv[2] if len(argv) > 2 else TAG
 
-    code, rel = api("GET", f"/repos/{REPO}/releases/tags/{TAG}")
+    code, rel = api("GET", f"/repos/{REPO}/releases/tags/{tag}")
     if code != 200:
         print("查询失败:", code, rel)
         return 1
 
-    show("当前状态", rel)
+    show(f"当前状态 ({tag})", rel)
 
     if want is None:
         return 0
@@ -121,9 +124,9 @@ def main(argv) -> int:
     show("已切换为", updated)
     if target_draft:
         print("\n草稿状态：公开页面上看不到，/releases/latest 会回落到上一个公开版本。")
-        print("本地测完后执行  python tools/set_release_state.py publish  即可转正。")
+        print(f"本地测完后执行  python tools/set_release_state.py publish {tag}  即可转正。")
     else:
-        print(f"\n已公开: https://github.com/{REPO}/releases/tag/{TAG}")
+        print(f"\n已公开: https://github.com/{REPO}/releases/tag/{tag}")
     return 0
 
 

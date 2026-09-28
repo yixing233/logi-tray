@@ -1,4 +1,10 @@
-"""Publish the v1.4.0 release containing all three editions.
+"""历史记录：发布 v1.4.0 的脚本，已被 release_v150.py 取代，不要重跑。
+
+它只创建了**草稿**（从未公开），且 tag 打在 fcf61d6 上 —— 那之后的「检查更新
+修复」「多品牌版 UI 重建」「三版托盘提示统一」都不在其中。要发新版请用
+tools/release_v150.py。保留本文件只为记录当时的说明措辞。
+
+--- 以下是原始说明 ---
 
 NOTE (2026-09): GitHub was unreachable from this machine for a long stretch, so this
 script could not be re-run to refresh the published assets after the update-check fix
