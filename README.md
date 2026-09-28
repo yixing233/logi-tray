@@ -368,6 +368,11 @@ python tools/package_release.py
 > （v1.5.0 就踩过这个坑，`/releases/tag/v1.5.0` 因此打不开）。若已经挂错，
 > 用 `python tools/attach_release_tag.py --fix` 改挂。
 
+作废的发布（例如建了草稿、随后被两代版本超越的那个）用 `tools/delete_release.py`
+撤掉：不带参数只预览 release id、tag 与资产清单，加 `--yes` 才真删。发布说明都留在
+仓库的 `tools/release_v*.py` 里，删掉线上发布不会丢内容；tag 是独立开关，默认保留，
+要一并删除再加 `--tag`。
+
 ---
 
 ## 📄 开源许可证
