@@ -200,6 +200,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ? $"{snapshot.DeviceName}: {snapshot.Percent}% ({snapshot.RemainingTimeText})"
             : $"{snapshot.DeviceName}: 离线或休眠";
 
+        // 悬停提示也补上「睡前还剩多少」：卡片要打开才看得到，
+        // 而这里一眼就能看到。措辞与多品牌版一致。
+        if (snapshot.HasLastKnown)
+        {
+            tooltip += $"（上次 {snapshot.LastKnownPercent}%，" +
+                $"{BatteryHistoryText.FormatAge(snapshot.LastKnownAt!.Value, DateTime.Now)}）";
+        }
+
         // NotifyIcon.Text 上限 63 字符，超出会抛异常
         if (tooltip.Length > 63)
         {

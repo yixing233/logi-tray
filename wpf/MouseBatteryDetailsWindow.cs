@@ -263,10 +263,31 @@ public sealed class MouseBatteryDetailsWindow : Window
         });
         statePanel.Children.Add(new TextBlock
         {
-            Text = snapshot.LevelText.Length > 0 ? $"电量等级 · {snapshot.LevelText}" : "电量状态",
+            // 有当前读数时照旧显示电量等级；读不到时改说「睡前还剩多少」。
+            //
+            // 大号数字仍是「--%」不变 —— 那是当前读数，拿旧值顶替会让人
+            // 以为现在还有那么多电（用户明确要的是「小字」）。
+            //
+            // 判定看的是「本轮有没有读到数」而不是 IsConnected：StaleGrace
+            // 容忍窗口内设备刚睡着的几分钟里 IsConnected 仍是 true、Percent
+            // 已经是 -1，那正是用户最想看睡前电量的时刻，不能在这时留白。
+            //
+            // 文案与判定统一由 BatteryHistoryText 提供，与轻量版、多品牌版
+            // 逐字相同；读不到又没记忆时返回空串，不写「电量等级 · 已休眠」
+            // 这种会让人以为是刚读到状态的兜底。
+            Text = snapshot.Percent > 0
+                ? (snapshot.LevelText.Length > 0 ? $"电量等级 · {snapshot.LevelText}" : "电量状态")
+                : BatteryHistoryText.OfflineSubtitle(snapshot.Percent,
+                    snapshot.LastKnownPercent, snapshot.LastKnownAt, DateTime.Now),
             FontSize = 10.5,
             FontWeight = FontWeights.Medium,
-            Foreground = ThemeService.TechBlueBrush,
+            // 有历史小字时用弱化色：它是回忆，不该和当前状态抢注意力
+            Foreground = snapshot.Percent > 0 || !snapshot.HasLastKnown
+                ? ThemeService.TechBlueBrush
+                : faint,
+            // 「上次 77% · 2 小时前」比原来的「电量等级 · 良好」长，
+            // 窄列放不下时用省略号收尾，不能让后半截被静默裁掉。
+            TextTrimming = TextTrimming.CharacterEllipsis,
             Margin = new Thickness(0, 1, 0, 0)
         });
         batteryRow.Children.Add(statePanel);

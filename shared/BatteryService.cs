@@ -267,10 +267,18 @@ public sealed class BatteryService : IDisposable
                 }
                 else
                 {
-                    // 本次休眠/未读到：平滑回退到最近的有效历史，绝不显示 0% 假报警
+                    // 本次休眠/未读到：把最近的有效历史挂到 LastKnown* 上，
+                    // 供卡片与托盘用小字说明「睡前还剩多少」。
+                    //
+                    // 刻意**不**改写 snapshot.Percent：那是**当前**读数，读不到
+                    // 就该老实显示「--%」。早先这里把历史值直接塞进 Percent，
+                    // 离线时大号数字就变成了几个小时前的旧电量，看上去像
+                    // 「现在还有 77%」—— 用户要的是小字，不是伪造当前值。
+                    // 低电量提醒、托盘图标、排序也因此天然只看真实读数。
                     var latest = _samples[^1];
-                    snapshot.Percent = latest.P;
-                    snapshot.IsCharging = latest.C;
+                    snapshot.LastKnownPercent = latest.P;
+                    snapshot.LastKnownAt =
+                        DateTimeOffset.FromUnixTimeSeconds((long)latest.T).ToLocalTime().DateTime;
                     double elapsed = nowEpoch - latest.T;
 
                     // 这里仍按「样本年龄」判断，而不是一失败就立刻判休眠：
@@ -559,7 +567,14 @@ public sealed class BatteryService : IDisposable
             double sEnd = new DateTimeOffset(hStart.AddHours(1)).ToUnixTimeSeconds();
 
             int count = 0;
-            int bucketPct = lastKnownPct > 0 ? lastKnownPct : snapshot.Percent;
+            // 桶内没有任何样本时沿用「上一个已知电量」：优先窗口之前的样本，
+            // 其次当前读数，最后才是休眠前记录的最后一次电量。
+            // 早先这里直接读 snapshot.Percent —— 那时离线会把历史值写进 Percent，
+            // 现在 Percent 诚实地保持 -1，所以必须显式回落到 LastKnownPercent，
+            // 否则休眠时长超过 24 小时的图表会整段退化成没有数据的空白。
+            int bucketPct = lastKnownPct > 0
+                ? lastKnownPct
+                : (snapshot.Percent > 0 ? snapshot.Percent : snapshot.LastKnownPercent);
 
             while (idx < _samples.Count && _samples[idx].T < sStart)
             {

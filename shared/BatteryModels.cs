@@ -24,6 +24,23 @@ public class BatterySnapshot
     public int MaxPercent { get; set; } = -1;
     public List<HourlyBucket> HourlyBuckets { get; set; } = new();
 
+    /// <summary>
+    /// 休眠前最后一次读到的电量，仅用于卡片/托盘的小字。
+    ///
+    /// 刻意与 <see cref="Percent"/> 分开：<see cref="Percent"/> 是**当前**读数，
+    /// 读不到时必须是 -1（界面显示「--%」）。早先的实现把历史值直接写进
+    /// Percent，结果离线时大号数字显示的是几个小时前的旧电量，看上去像
+    /// 「现在还有 77%」—— 用户要的是小字，不是把当前值篡改掉。
+    /// </summary>
+    public int LastKnownPercent { get; set; } = -1;
+
+    /// <summary>上面那个读数的**本地**时间；无记忆时为 null。</summary>
+    public DateTime? LastKnownAt { get; set; }
+
+    /// <summary>本轮读不到数、但有旧电量可显示时，是否该出「休眠前最后一次电量」小字。</summary>
+    public bool HasLastKnown =>
+        BatteryHistoryText.HasLastKnown(Percent, LastKnownPercent, LastKnownAt);
+
     public static BatterySnapshot Offline(string deviceName = "罗技设备") => new()
     {
         DeviceName = deviceName,

@@ -176,22 +176,19 @@ public static class BatteryHistory
         return removed;
     }
 
-    /// <summary>把「上次电量」渲染成卡片上的小字，例如「上次 77% · 2 小时前」。</summary>
+    /// <summary>
+    /// 把「上次电量」渲染成卡片上的小字，例如「上次 77% · 2 小时前」。
+    ///
+    /// 实体实现已挪到 <see cref="BatteryHistoryText"/>：完整版/轻量版也要说同一句话，
+    /// 文案留在本文件就会变成三份各自漂移的副本。这里保留同名转发，
+    /// 既不改动既有调用点，也保证三个版本的输出必然逐字相同。
+    /// </summary>
     public static string Describe(int percent, DateTime? at, DateTime now)
-        => at.HasValue
-            ? $"上次 {percent}% · {FormatAge(at.Value, now)}"
-            : $"上次 {percent}%";
+        => BatteryHistoryText.Describe(percent, at, now);
 
     /// <summary>相对时长，例如「刚刚」「5 分钟前」「3 小时前」「2 天前」。</summary>
     public static string FormatAge(DateTime at, DateTime now)
-    {
-        TimeSpan d = now - at;
-        if (d < TimeSpan.Zero) d = TimeSpan.Zero;
-        if (d.TotalMinutes < 1) return "刚刚";
-        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes} 分钟前";
-        if (d.TotalDays < 1) return $"{(int)d.TotalHours} 小时前";
-        return $"{(int)d.TotalDays} 天前";
-    }
+        => BatteryHistoryText.FormatAge(at, now);
 
     // ───────────── 落盘 ─────────────
 

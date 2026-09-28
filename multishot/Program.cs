@@ -40,6 +40,7 @@ internal static class Shot
                 failures += ShotSettings(outDir);
                 failures += ShotCard(outDir);
                 failures += ShotSleepingCard(outDir);
+                failures += CheckHistoryText();
             }
             catch (Exception ex)
             {
@@ -451,6 +452,112 @@ internal static class Shot
             }
 
             win.Close();
+        }
+        return bad;
+    }
+
+    /// <summary>
+    /// 「休眠前最后一次电量」文案的纯逻辑自检。
+    ///
+    /// 这部分以前只存在于多品牌版，完整版/轻量版各写一份的话三处必然漂移，
+    /// 所以实体统一放在 <see cref="BatteryHistoryText"/>（shared），
+    /// 三个版本共用同一份实现。这里用合成数据把它钉死：
+    /// 断言不依赖任何窗口或真机状态，纯字符串比较。
+    /// </summary>
+    private static int CheckHistoryText()
+    {
+        int bad = 0;
+        var now = new DateTime(2026, 3, 14, 12, 0, 0, DateTimeKind.Local);
+
+        void Expect(string what, string actual, string expected)
+        {
+            if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            {
+                Console.WriteLine($"  !! [history] {what} 期望「{expected}」，实际「{actual}」");
+                bad++;
+            }
+        }
+
+        // 时间档位：刚刚 / 分钟 / 小时 / 天
+        Expect("同一时刻", BatteryHistoryText.FormatAge(now, now), "刚刚");
+        Expect("30 秒前", BatteryHistoryText.FormatAge(now.AddSeconds(-30), now), "刚刚");
+        Expect("5 分钟前", BatteryHistoryText.FormatAge(now.AddMinutes(-5), now), "5 分钟前");
+        Expect("59 分钟前", BatteryHistoryText.FormatAge(now.AddMinutes(-59), now), "59 分钟前");
+        Expect("2 小时前", BatteryHistoryText.FormatAge(now.AddHours(-2), now), "2 小时前");
+        Expect("23 小时前", BatteryHistoryText.FormatAge(now.AddHours(-23), now), "23 小时前");
+        Expect("3 天前", BatteryHistoryText.FormatAge(now.AddDays(-3), now), "3 天前");
+
+        // 时钟回拨：差值变负数时不得出现「-1 分钟前」
+        Expect("未来时间", BatteryHistoryText.FormatAge(now.AddMinutes(10), now), "刚刚");
+
+        // Describe 的两条分支
+        Expect("带时间", BatteryHistoryText.Describe(77, now.AddHours(-2), now), "上次 77% · 2 小时前");
+        Expect("无时间", BatteryHistoryText.Describe(42, null, now), "上次 42%");
+
+        // HasLastKnown：三个条件缺一不可。
+        // 注意判定内部会拿真实当前时间比有效期，所以这里的时间必须相对
+        // DateTime.Now 构造 —— 用固定日期的话过几个月这条用例会自己失效。
+        DateTime realNow = DateTime.Now;
+        bool H(int percent, int last, DateTime? at) =>
+            BatteryHistoryText.HasLastKnown(percent, last, at);
+
+        if (!H(-1, 77, realNow.AddHours(-1)))
+        {
+            Console.WriteLine("  !! [history] 读不到且有记忆时应为 true");
+            bad++;
+        }
+        // StaleGrace 窗口内 IsConnected 仍为 true，但本轮就是没读到数 ——
+        // 这时必须照常给睡前电量，否则设备刚睡着的几分钟卡片会莫名留白。
+        if (!H(-1, 77, realNow.AddHours(-1)))
+        {
+            Console.WriteLine("  !! [history] 容忍窗口内（IsConnected 尚为 true）也应显示睡前电量");
+            bad++;
+        }
+        if (H(-1, -1, realNow.AddHours(-1)))
+        {
+            Console.WriteLine("  !! [history] 无记忆时不得凭空显示");
+            bad++;
+        }
+        if (H(-1, 77, null))
+        {
+            Console.WriteLine("  !! [history] 缺时间时不得显示（无法说明多久之前）");
+            bad++;
+        }
+        if (H(50, 77, realNow.AddHours(-1)))
+        {
+            Console.WriteLine("  !! [history] 有当前读数时不得用小字顶替");
+            bad++;
+        }
+        if (H(-1, 77, realNow.AddDays(-31)))
+        {
+            Console.WriteLine("  !! [history] 超过 30 天的记忆必须失效");
+            bad++;
+        }
+
+        // 记忆的有效期
+        if (!BatteryHistoryText.IsFresh(now.AddDays(-29), now))
+        {
+            Console.WriteLine("  !! [history] 29 天前的记忆应仍在有效期内");
+            bad++;
+        }
+        if (BatteryHistoryText.IsFresh(now.AddDays(-31), now))
+        {
+            Console.WriteLine("  !! [history] 超过 30 天的记忆必须失效");
+            bad++;
+        }
+
+        // 第二行副文案：有记忆给「上次 X%」，没记忆必须留空 —— 不得出现
+        // 「电量等级 · 已休眠」这类会让人误以为是刚读到状态的兜底。
+        Expect("读不到有记忆",
+            BatteryHistoryText.OfflineSubtitle(-1, 77, realNow.AddHours(-2), realNow),
+            "上次 77% · 2 小时前");
+        Expect("读不到无记忆", BatteryHistoryText.OfflineSubtitle(-1, -1, null, realNow), "");
+        Expect("有实时读数", BatteryHistoryText.OfflineSubtitle(77, -1, null, realNow), "");
+        Expect("记忆已过期", BatteryHistoryText.OfflineSubtitle(-1, 77, realNow.AddDays(-31), realNow), "");
+
+        if (bad == 0)
+        {
+            Console.WriteLine("[history] 休眠前电量文案自检通过 ✓");
         }
         return bad;
     }

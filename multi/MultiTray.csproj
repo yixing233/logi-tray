@@ -28,6 +28,12 @@
     <Compile Include="..\shared\AppIdentity.cs" LinkBase="Shared" />
     <Compile Include="..\shared\AppPalette.cs" LinkBase="Shared" />
     <Compile Include="..\shared\AutoStartService.cs" LinkBase="Shared" />
+    <!--
+      「休眠前最后一次电量」小字的文案。完整版/轻量版靠 ..\shared\*.cs 通配符
+      自动包含，多品牌版只按文件名白名单引用，所以必须在这里显式列出来，
+      否则 BatteryHistory 转发过去时会找不到 BatteryHistoryText。
+    -->
+    <Compile Include="..\shared\BatteryHistoryText.cs" LinkBase="Shared" />
     <Compile Include="..\shared\UnmanagedMethods.cs" LinkBase="Shared" />
     <!-- 三个版本共用同一套「检查更新」逻辑：各自比对属于自己的资产版本号 -->
     <Compile Include="..\shared\UpdateChecker.cs" LinkBase="Shared" />

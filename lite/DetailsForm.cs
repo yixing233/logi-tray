@@ -28,6 +28,19 @@ internal sealed class DetailsForm : Form
     /// </summary>
     private const int PercentLabelWidth = 106;
 
+    /// <summary>
+    /// 离线时大号电量标签的宽度。
+    ///
+    /// 离线时大号数字只是「--」（22pt 实测 26px），却和在线时的「100%」（85px）
+    /// 占着同一个为 106px 的列，把右侧列挤到只剩 100px。而离线时右侧第二行
+    /// 要改说「上次 100% · 23 小时前」（8.5pt 实测 125px）——
+    /// 左边空着一大片、右边却把「2 小时前」用省略号吃掉，就是这里的矛盾。
+    ///
+    /// 所以离线时把左列收到 40px：右侧列变成 232-52-14 = 166px，
+    /// 最坏文案 125px 也能完整放下。40px 远大于「--」的 26px，不会裁到数字。
+    /// </summary>
+    private const int PercentLabelWidthOffline = 40;
+
     /// <summary>大号电量标签的右边界，也是右侧状态列的起点。</summary>
     private const int PercentLabelRight = 12 + PercentLabelWidth;
 
@@ -136,7 +149,11 @@ internal sealed class DetailsForm : Form
             Location = new Point(PercentLabelRight, 63),
             Size = new Size(CardWidth - PercentLabelRight - RightColumnRightPadding, 18),
             TextAlign = ContentAlignment.MiddleLeft,
-            BackColor = Color.Transparent
+            BackColor = Color.Transparent,
+            // 这一行现在还要放「上次 77% · 2 小时前」这种文案，
+            // 比原来的续航文案长，窄列里放不下时用省略号收尾，
+            // 绝不能让 Label 静默裁掉后半截（那会把「2 小时前」吃掉）。
+            AutoEllipsis = true
         };
 
         // ---- 分隔线 ----
@@ -267,12 +284,39 @@ internal sealed class DetailsForm : Form
         _chart.Dark = dark;
     }
 
+    /// <summary>
+    /// 按「本轮有没有读到数」摆放右侧的两行文字。
+    ///
+    /// 离线时大号数字只是「--」，没必要继续占着为「100%」预留的 106px 列；
+    /// 把这一列收窄到 <see cref="PercentLabelWidthOffline"/>，
+    /// 右侧就多出 66px 来放「上次 100% · 23 小时前」（实测 125px）。
+    /// 在线时恢复原状，保证「100%」这类三位数不被裁到。
+    /// </summary>
+    private void ApplyRightColumnLayout(bool offline)
+    {
+        int left = offline ? 12 + PercentLabelWidthOffline : PercentLabelRight;
+        int width = CardWidth - left - RightColumnRightPadding;
+
+        // 大号数字的标签必须一起收窄。它没有透明背景（在线时是彩色大字，
+        // 需要自己的底色），宽度不改就会用不透明底色盖住右列开头，
+        // 表现为「已休眠」左边缺一竖 —— 与 PercentLabelWidth 注释里记的坑同源。
+        _percentLabel.Width = offline ? PercentLabelWidthOffline : PercentLabelWidth;
+
+        _statusLabel.Location = new Point(left, 44);
+        _statusLabel.Size = new Size(width, 18);
+        _remainingLabel.Location = new Point(left, 63);
+        _remainingLabel.Size = new Size(width, 18);
+    }
+
     /// <summary>用最新的电量快照刷新界面。</summary>
     public void UpdateData(BatterySnapshot snapshot)
     {
         _lastSnapshot = snapshot;
 
         _deviceLabel.Text = string.IsNullOrWhiteSpace(snapshot.DeviceName) ? "罗技设备" : snapshot.DeviceName;
+
+        // 先摆放列宽再填文字：离线时要把左列让出来给历史小字
+        ApplyRightColumnLayout(snapshot.Percent <= 0);
 
         if (snapshot.Percent >= 0)
         {
@@ -294,9 +338,27 @@ internal sealed class DetailsForm : Form
         bool remainingDuplicatesStatus = snapshot.IsCharging &&
             string.Equals(snapshot.RemainingTimeText?.Trim(), "充电中", StringComparison.Ordinal);
 
-        _remainingLabel.Text = string.IsNullOrWhiteSpace(snapshot.RemainingTimeText) || remainingDuplicatesStatus
+        string remaining = string.IsNullOrWhiteSpace(snapshot.RemainingTimeText) || remainingDuplicatesStatus
             ? ""
             : snapshot.RemainingTimeText;
+
+        // 读不到当前读数时，这一行改说「睡前还剩多少」；没有记忆就留空。
+        //
+        // 大号数字仍是「--」不变 —— 那是当前读数，拿旧值顶替会让人以为
+        // 现在还有那么多电（用户明确要的是「小字」）。
+        //
+        // 判定看的是「本轮有没有读到数」而不是 IsConnected：StaleGrace
+        // 容忍窗口内设备刚睡着的几分钟里 IsConnected 仍是 true、Percent
+        // 已经是 -1，那正是用户最想看睡前电量的时刻，不能在这时留白。
+        //
+        // 文案与判定统一由 BatteryHistoryText 提供，与完整版/多品牌版逐字相同。
+        if (snapshot.Percent <= 0)
+        {
+            remaining = BatteryHistoryText.OfflineSubtitle(snapshot.Percent,
+                snapshot.LastKnownPercent, snapshot.LastKnownAt, DateTime.Now);
+        }
+
+        _remainingLabel.Text = remaining;
 
         if (snapshot.MinPercent >= 0 && snapshot.MaxPercent >= 0)
         {

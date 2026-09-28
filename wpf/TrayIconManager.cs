@@ -226,6 +226,14 @@ public sealed class TrayIconManager : IDisposable
             ? $"{snapshot.DeviceName}: {snapshot.Percent}% ({snapshot.RemainingTimeText})"
             : $"{snapshot.DeviceName}: 离线或休眠";
 
+        // 悬停提示也补上「睡前还剩多少」：卡片要打开才看得到，
+        // 而这里一眼就能看到。措辞与多品牌版一致。
+        if (snapshot.HasLastKnown)
+        {
+            tooltip += $"（上次 {snapshot.LastKnownPercent}%，" +
+                $"{BatteryHistoryText.FormatAge(snapshot.LastKnownAt!.Value, DateTime.Now)}）";
+        }
+
         if (tooltip.Length > 63) tooltip = tooltip[..63];
         _notifyIcon.Text = tooltip;
     }
