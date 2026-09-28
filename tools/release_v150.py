@@ -300,7 +300,14 @@ def main(argv) -> int:
             return 1
         print(f"   {name:<28} {os.path.getsize(path)/1024:>7.0f} KB")
 
+    # 草稿没有真 tag（GitHub 先给 `untagged-<hash>`，转公开时才打上 TAG），
+    # 所以先按 tag 查、查不到再列全部 release 按 tag_name 找。否则重跑本脚本
+    # 会把已存在的草稿当成不存在 → POST 同名 tag → 422 already_exists。
     status, rel = api("GET", f"/repos/{REPO}/releases/tags/{TAG}")
+    if status != 200:
+        _, all_rel = api("GET", f"/repos/{REPO}/releases?per_page=100")
+        hit = next((r for r in (all_rel or []) if r.get("tag_name") == TAG), None)
+        status, rel = (200, hit) if hit else (status, rel)
     if status == 200:
         print(f"\nrelease 已存在: {rel['html_url']}")
         print(f"  当前状态: draft={rel['draft']} prerelease={rel['prerelease']}")

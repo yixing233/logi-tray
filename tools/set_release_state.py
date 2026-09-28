@@ -84,6 +84,27 @@ def api(method: str, path: str, body=None):
         return e.code, e.read().decode(errors="replace")
 
 
+def find_release(tag: str):
+    """按 tag 找 release。
+
+    为什么不能只用 /releases/tags/{tag}：**草稿没有 tag** —— GitHub 在创建草稿时
+    先给它一个 `untagged-<hash>` 的临时 tag，只有转成公开时才真正打上 tag。
+    因此对草稿按 tag 查询必然 404，转念去列全部 release（含草稿）按 tag_name 找，
+    才是「代码改完了但还没试过，先建个草稿」这个流程下唯一能查到它的方式。
+    """
+    code, rel = api("GET", f"/repos/{REPO}/releases/tags/{tag}")
+    if code == 200:
+        return rel, None
+    code, rels = api("GET", f"/repos/{REPO}/releases?per_page=100")
+    if code != 200:
+        return None, f"查询失败: {code} {rels}"
+    for r in rels:
+        if r.get("tag_name") == tag:
+            return r, None
+    return None, (f"找不到 {tag}。草稿在 GitHub 上是 `untagged-<hash>`，"
+                  f"若这次发布已删除或被改名就查不到了。")
+
+
 def show(label: str, rel: dict) -> None:
     print(f"{label}: draft={rel['draft']} prerelease={rel['prerelease']} "
           f"published_at={rel.get('published_at')}")
@@ -99,9 +120,9 @@ def main(argv) -> int:
         return 1
     tag = argv[2] if len(argv) > 2 else TAG
 
-    code, rel = api("GET", f"/repos/{REPO}/releases/tags/{tag}")
-    if code != 200:
-        print("查询失败:", code, rel)
+    rel, err = find_release(tag)
+    if err:
+        print(err)
         return 1
 
     show(f"当前状态 ({tag})", rel)
