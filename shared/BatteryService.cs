@@ -21,6 +21,9 @@ public sealed class BatteryService : IDisposable
     private bool _hasAlertedLow;
     private bool _hasAlertedCritical;
 
+    /// <summary>轮询重入闸：1 表示已有原生读取进程在跑。见 PollBattery 的注释。</summary>
+    private int _polling;
+
     public event Action<BatterySnapshot>? SnapshotUpdated;
     public event Action<string, string>? AlertTriggered;
 
@@ -75,6 +78,33 @@ public sealed class BatteryService : IDisposable
     {
         if (_isDisposed) return;
 
+        // 同一时刻只允许一个原生进程在跑。
+        //
+        // 为什么必须串行：Windows 把一个 HID 集合的输入报告只投递给**其中一个**
+        // 持有句柄的进程。若定时轮询与「打开卡片时的立即刷新」同时各起一个
+        // mouse-tray.exe，两个进程会互相抢走对方的应答，结果双双读失败 ——
+        // 表现就是用户刚唤醒鼠标、点开卡片，反而又把这一轮读砸了。
+        // 这里的做法是让后来者直接放弃：上一次轮询刚跑完（现在只要几十毫秒），
+        // 紧接着的下一次定时轮询自然会带上最新值。
+        if (Interlocked.CompareExchange(ref _polling, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            PollBatteryCore();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _polling, 0);
+        }
+    }
+
+    private void PollBatteryCore()
+    {
+        if (_isDisposed) return;
+
         // 一次读取失败时可能仍能从历史恢复电量，型号也应保留最近一次成功读取的值。
         string deviceName = string.IsNullOrWhiteSpace(CurrentSnapshot.DeviceName)
             ? "罗技设备"
@@ -83,6 +113,13 @@ public sealed class BatteryService : IDisposable
         bool isCharging = false;
         string statusText = "放电中";
         string levelText = "良好";
+
+        // 原生进程的退出码是「设备此刻是否可达」唯一可靠的信号：
+        //   0 = 读到了电量；2 = 整轮都没读到（设备休眠/离线）；
+        //   null = 进程超时未收尾或根本没启动 —— 未知，交给历史按样本年龄判断。
+        // 不能再用「样本年龄」单独推断休眠：那会让一次读取失败在整整
+        // StaleGrace(300s) 内都显示「已休眠」，即使设备早已被唤醒。
+        bool? reachable = null;
 
         // 1. 调用原生 reader 读取最新电量 (必须显式指定 UTF-8 编码，防止 Windows 中文下 · 字符被 GBK 替换导致截断为 0%)
         try
@@ -102,7 +139,23 @@ public sealed class BatteryService : IDisposable
                 if (p != null)
                 {
                     string output = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit(3000);
+
+                    // 原生读取器的预算已从 1.5s 抬到 3s（要给唤醒中的设备留出
+                    // 首帧 650~850ms + 若干次往返的时间），因此这里的兜底等待
+                    // 必须跟着放宽，否则会在读取器正常收尾前就返回，白白丢掉
+                    // 本轮已经读到的电量。
+                    if (p.WaitForExit(5000))
+                    {
+                        switch (p.ExitCode)
+                        {
+                            case 0:
+                                reachable = true;
+                                break;
+                            case 2:
+                                reachable = false;
+                                break;
+                        }
+                    }
 
                     // 原生读取器每行格式："设备名: 89% · 放电中 · 良好"
                     // 电量必须只在**冒号之后**的部分里找：设备名本身可能含
@@ -165,7 +218,7 @@ public sealed class BatteryService : IDisposable
         catch { }
 
         // 2. 解析 history.json，提取 24 小时时段分析与续航预测
-        var snapshot = BuildSnapshotFromHistory(deviceName, percent, isCharging, statusText, levelText);
+        var snapshot = BuildSnapshotFromHistory(deviceName, percent, isCharging, statusText, levelText, reachable);
         CurrentSnapshot = snapshot;
 
         // 3. 低电量提醒判断
@@ -175,7 +228,8 @@ public sealed class BatteryService : IDisposable
     }
 
     private BatterySnapshot BuildSnapshotFromHistory(
-        string deviceName, int percent, bool isCharging, string statusText, string levelText)
+        string deviceName, int percent, bool isCharging, string statusText, string levelText,
+        bool? reachable = null)
     {
         var snapshot = new BatterySnapshot
         {
@@ -218,7 +272,30 @@ public sealed class BatteryService : IDisposable
                     snapshot.Percent = latest.P;
                     snapshot.IsCharging = latest.C;
                     double elapsed = nowEpoch - latest.T;
+
+                    // 这里仍按「样本年龄」判断，而不是一失败就立刻判休眠：
+                    // 单次读取失败可能是短暂的（设备正在被唤醒、G HUB 抢走了这一轮
+                    // 应答……），StaleGrace 就是留给这种抖动的容忍窗口，贸然改成
+                    // 「一次失败即休眠」会让卡片在设备好好的时候闪成「已休眠」。
+                    //
+                    // 「已唤醒却仍显示休眠」的真正病根在原生读取器的预算分配，
+                    // 已由 fail-fast + 3 秒预算修掉：空槽位现在几毫秒内被回绝，
+                    // 唤醒中的设备拿得到它需要的 650~850ms。原生一旦读到电量，
+                    // percent > 0 就不会走到这个分支，状态自然立刻恢复。
                     snapshot.IsConnected = elapsed < _config.StaleGrace;
+
+                    // 唯一的例外：原生进程明确回了「读到了」（exit 0），说明设备此刻
+                    // 确实可达。正常情况下 exit 0 必然带回了百分比，走不到这个分支；
+                    // 但若原生读到了读数而本方法解析 stdout 失败（格式变动、编码异常），
+                    // percent 会停在 -1，此时绝不能再叫「已休眠」。
+                    //
+                    // 刻意**不用** reachable == false 去强制休眠：那是单向的另一半，
+                    // 会让一次失败立刻把卡片打成「已休眠」，正是本缺陷要修的表现。
+                    if (reachable == true)
+                    {
+                        snapshot.IsConnected = true;
+                    }
+
                     if (!snapshot.IsConnected)
                     {
                         snapshot.LevelText = "已休眠";
@@ -330,7 +407,15 @@ public sealed class BatteryService : IDisposable
         return true;
     }
 
-    /// <summary>丢弃保留窗口之外的旧样本，防止内存与文件无限增长。</summary>
+    /// <summary>
+    /// 丢弃保留窗口之外的旧样本，防止内存与文件无限增长。
+    ///
+    /// 但**永远保留最新那一个样本**：它是「休眠前最后一次电量」的唯一来源
+    /// （见 BuildSnapshotFromHistory 里 percent &lt;= 0 的回退分支）。
+    /// 若把样本裁光，设备休眠超过 48 小时后卡片就退化成「--%」+「设备离线」，
+    /// 连「睡前还剩多少」都看不到 —— 而这正是离线时唯一还有参考价值的信息。
+    /// 那一个样本同时会被写回文件，因此跨重启也不会丢。
+    /// </summary>
     private void PruneOldSamples(double nowEpoch)
     {
         double cutoff = nowEpoch - RetainSeconds;
@@ -338,6 +423,12 @@ public sealed class BatteryService : IDisposable
         while (drop < _samples.Count && _samples[drop].T < cutoff)
         {
             drop++;
+        }
+
+        // 全部过期时最多裁到只剩最后一个，绝不裁空。
+        if (drop >= _samples.Count)
+        {
+            drop = _samples.Count - 1;
         }
 
         if (drop > 0)

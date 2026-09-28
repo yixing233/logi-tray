@@ -258,6 +258,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         _detailsForm.UpdateData(_batteryService.CurrentSnapshot);
+
+        // 打开卡片时主动补读一次：轮询间隔默认 30 秒，用户「刚把鼠标动醒、
+        // 马上点开卡片」时看到的很可能是醒来之前那一轮的结果（「已休眠」）。
+        // 若已有轮询在跑，BatteryService 的重入闸会直接忽略这次请求。
+        _batteryService.RefreshNow();
+
         _detailsForm.ShowNear(AnchorPoint);
     }
 

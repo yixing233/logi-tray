@@ -50,6 +50,39 @@ struct Parsed {
     bool        valid = false;            // 是否至少拿到了电量信息
 };
 
+// ------------------------------------------------------- HID++ 1.0 短报文回应
+//
+// 本机实测（`_col_probe.py` / `_echo_test.py` / `_echo.txt`）：
+// 把 20 字节的 HID++ 2.0 长请求写进长集合（usage 0x0002）后，若**目标设备
+// 不可达**，接收器会在 3~5ms 内从**短集合**（usage 0x0001）回一条 7 字节的
+// HID++ 1.0 错误帧：
+//
+//     10 <设备号> 8F <请求的 byte2> <请求的 byte3> <错误码> 00
+//
+// 逐字节含义：0x10 短报文头 / 0x8F 是 1.0 的 error sub-ID（2.0 的错误帧
+// byte2 才是 0xFF，形状完全不同）/ byte3、byte4 原样镜像我们请求的
+// featureIndex 与 functionByte（已用 5 组不同取值验证过镜像关系）/ byte5 错误码。
+//
+// 为什么必须认这条帧：它把「设备明确不可达」与「等不到任何应答」区分开。
+// 前者可以立刻放弃（省下一整个探测窗口），后者才是真正需要耐心等待的
+// 唤醒场景。读取器原先只轮询长集合，永远看不到这些应答，于是每个空槽位
+// 都要白等满超时。
+constexpr uint8_t kHidppShort       = 0x10;
+constexpr uint8_t kHidppErrorSubId  = 0x8F;
+constexpr uint8_t kHidppErrInvalidSubId  = 0x01;  // 接收器本体不认这个 sub-ID
+constexpr uint8_t kHidppErrUnknownDevice = 0x08;  // 槽位无设备 / 设备当前不可达
+
+// 是不是一条 1.0 短报文（报告号 0x10，且长度够放下错误帧）。
+bool IsShortReport(const uint8_t* buf, int len);
+
+// 这条短报文是不是**针对本次请求**的 1.0 错误应答。
+//
+// 必须逐项对齐 deviceIndex / featureIndex / functionByte：同一个槽位上
+// IsPresent 的请求在连续几次尝试里字节完全相同，若只比对设备号，一条迟到的
+// 陈旧错误帧就会被当成当前这次的结果。
+bool MatchShortError(const uint8_t* buf, int len, int deviceIndex,
+                     int featureIndex, int functionByte, int* errOut);
+
 // ---------------------------------------------------------------- 文字与映射
 
 std::string ChargingText(int state);

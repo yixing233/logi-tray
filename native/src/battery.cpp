@@ -305,6 +305,28 @@ Parsed ParseCenturionSoc(const uint8_t* data, int len) {
     return out;
 }
 
+// -------------------------------------------------- HID++ 1.0 短报文回应判定
+
+bool IsShortReport(const uint8_t* buf, int len) {
+    return buf != nullptr && len >= 7 && buf[0] == kHidppShort;
+}
+
+bool MatchShortError(const uint8_t* buf, int len, int deviceIndex,
+                     int featureIndex, int functionByte, int* errOut) {
+    if (!IsShortReport(buf, len)) return false;
+    if (buf[2] != kHidppErrorSubId) return false;
+
+    // 三个字段都必须与本次请求一致，否则可能是上一次请求的迟到应答。
+    // 短报文没有 function 的独立字节位置，byte2/byte3 正是我们长帧里的
+    // featureIndex / functionByte 被接收器原样回填的（实测确认）。
+    if (buf[1] != static_cast<uint8_t>(deviceIndex)) return false;
+    if (buf[3] != static_cast<uint8_t>(featureIndex)) return false;
+    if (buf[4] != static_cast<uint8_t>(functionByte)) return false;
+
+    if (errOut != nullptr) *errOut = buf[5];
+    return true;
+}
+
 // ---------------------------------------------------------------- 自检
 
 namespace {
@@ -532,6 +554,98 @@ int RunParseTests() {
         const Parsed p = ParseCenturionSoc(d, 3);
         CheckInt(p.chargingState == kStateDischarging, "状态 0 -> 放电",
                  p.chargingState, kStateDischarging);
+    }
+
+    // ---------- HID++ 1.0 短报文错误帧判定 ----------
+    //
+    // 这些帧全部来自本机实测（_col_probe.py / _echo_test.py / _echo.txt），
+    // 不是构造出来的理想值：把 2.0 长请求写进长集合后，接收器在短集合上
+    // 用这种形状回答「目标设备不可达」。
+    std::printf(u8"\n[HID++ 1.0 短报文错误帧判定]\n");
+    {
+        // 实测原帧：2.0 请求 (dev=0xFF, feature=0x00, functionByte=0x0A)
+        // 得到 10 FF 8F 00 0A 01 00 —— byte3/byte4 镜像请求的 byte2/byte3。
+        const uint8_t real[7] = {0x10, 0xFF, 0x8F, 0x00, 0x0A, 0x01, 0x00};
+        Check(IsShortReport(real, 7), "识别为 1.0 短报文",
+              IsShortReport(real, 7) ? "yes" : "no", "yes");
+
+        int err = -1;
+        Check(MatchShortError(real, 7, 0xFF, 0x00, 0x0A, &err),
+              "匹配接收器本体的 INVALID_SUBID 应答",
+              MatchShortError(real, 7, 0xFF, 0x00, 0x0A, nullptr) ? "yes" : "no",
+              "yes");
+        CheckInt(err == kHidppErrInvalidSubId, "错误码 = 0x01 INVALID_SUBID",
+                 err, kHidppErrInvalidSubId);
+    }
+    {
+        // 实测原帧：槽位 1 无设备 -> 10 01 8F 00 0A 08 00
+        const uint8_t absent[7] = {0x10, 0x01, 0x8F, 0x00, 0x0A, 0x08, 0x00};
+        int err = -1;
+        Check(MatchShortError(absent, 7, 0x01, 0x00, 0x0A, &err),
+              "匹配槽位 1 的 UNKNOWN_DEVICE 应答",
+              MatchShortError(absent, 7, 0x01, 0x00, 0x0A, nullptr) ? "yes" : "no",
+              "yes");
+        CheckInt(err == kHidppErrUnknownDevice, "错误码 = 0x08 UNKNOWN_DEVICE",
+                 err, kHidppErrUnknownDevice);
+    }
+    {
+        // 镜像关系的另外两组实测取值：请求 byte2 变 0x03、byte3 变 0x2A
+        // （来自 _echo_test.py 的 11 FF 03 0A ... 与 11 FF 00 2A ...）。
+        const uint8_t m1[7] = {0x10, 0xFF, 0x8F, 0x03, 0x0A, 0x01, 0x00};
+        Check(MatchShortError(m1, 7, 0xFF, 0x03, 0x0A, nullptr),
+              "byte3 镜像 featureIndex=0x03",
+              MatchShortError(m1, 7, 0xFF, 0x03, 0x0A, nullptr) ? "yes" : "no",
+              "yes");
+        const uint8_t m2[7] = {0x10, 0xFF, 0x8F, 0x00, 0x2A, 0x01, 0x00};
+        Check(MatchShortError(m2, 7, 0xFF, 0x00, 0x2A, nullptr),
+              "byte4 镜像 functionByte=0x2A",
+              MatchShortError(m2, 7, 0xFF, 0x00, 0x2A, nullptr) ? "yes" : "no",
+              "yes");
+    }
+    {
+        // 必须排除的情况：设备号/特性/function 任一不符都不能算命中 ——
+        // 否则一条迟到的陈旧错误帧会被误当成当前这次的结果，把在线设备
+        // 判成不可达（那会让它再也读不到）。
+        const uint8_t absent[7] = {0x10, 0x01, 0x8F, 0x00, 0x0A, 0x08, 0x00};
+        Check(!MatchShortError(absent, 7, 0x02, 0x00, 0x0A, nullptr),
+              "设备号不符 -> 不命中",
+              MatchShortError(absent, 7, 0x02, 0x00, 0x0A, nullptr) ? "yes" : "no",
+              "no");
+        Check(!MatchShortError(absent, 7, 0x01, 0x05, 0x0A, nullptr),
+              "featureIndex 不符 -> 不命中",
+              MatchShortError(absent, 7, 0x01, 0x05, 0x0A, nullptr) ? "yes" : "no",
+              "no");
+        Check(!MatchShortError(absent, 7, 0x01, 0x00, 0x0B, nullptr),
+              "functionByte 不符 -> 不命中",
+              MatchShortError(absent, 7, 0x01, 0x00, 0x0B, nullptr) ? "yes" : "no",
+              "no");
+
+        // 2.0 的成功应答（报告号 0x11）绝不能被当成 1.0 错误帧。
+        const uint8_t long2[20] = {0x11, 0x01, 0x00, 0x0A};
+        Check(!IsShortReport(long2, 20), "0x11 长帧不算短报文",
+              IsShortReport(long2, 20) ? "yes" : "no", "no");
+        Check(!MatchShortError(long2, 20, 0x01, 0x00, 0x0A, nullptr),
+              "长帧不命中短报文错误",
+              MatchShortError(long2, 20, 0x01, 0x00, 0x0A, nullptr) ? "yes" : "no",
+              "no");
+
+        // 2.0 自己的错误帧形状是 byte2 = 0xFF，与 1.0 的 0x8F 不同，
+        // 不能被这条判定吃掉（它是长集合上的合法应答）。
+        const uint8_t err2[20] = {0x11, 0x01, 0x00, 0xFF, 0x00};
+        Check(!MatchShortError(err2, 20, 0x01, 0x00, 0x0A, nullptr),
+              "2.0 错误帧（0xFF）不误判为 1.0 错误",
+              MatchShortError(err2, 20, 0x01, 0x00, 0x0A, nullptr) ? "yes" : "no",
+              "no");
+
+        // 长度不足 7、空指针都不能读越界。
+        Check(!IsShortReport(absent, 6), "不足 7 字节不算短报文",
+              IsShortReport(absent, 6) ? "yes" : "no", "no");
+        Check(!IsShortReport(nullptr, 7), "空指针不算短报文",
+              IsShortReport(nullptr, 7) ? "yes" : "no", "no");
+        Check(!MatchShortError(nullptr, 7, 0x01, 0x00, 0x0A, nullptr),
+              "空指针不命中",
+              MatchShortError(nullptr, 7, 0x01, 0x00, 0x0A, nullptr) ? "yes" : "no",
+              "no");
     }
 
     // ---------- 短帧 / 空指针健壮性 ----------

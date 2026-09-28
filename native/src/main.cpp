@@ -27,7 +27,11 @@ int RunOnce(bool allDevices = false) {
     // 默认只读每个接收器上的第一台设备：应用以 --once 每轮新起进程，
     // 槽位发现缓存无法保留，继续扫空槽位会平白增加每次轮询的耗时。
     // --all 用于枚举同一接收器上的多台设备。
-    const auto readings = hidpp::ReadAll(2.0, allDevices);
+    //
+    // 预算 3 秒而不是更短：空槽位现在会被短报文错误帧在几毫秒内回绝，
+    // 所以这笔预算实际不会花在空槽位上；它只服务于"设备正从休眠唤醒"的
+    // 那一次 —— 实测唤醒首帧要 650~850ms，之后还要串起 4~6 次电量往返。
+    const auto readings = hidpp::ReadAll(3.0, allDevices);
     if (readings.empty()) {
         util::Print(u8"未读到电量（鼠标可能正在休眠，动一下再试）\n");
         return 2;

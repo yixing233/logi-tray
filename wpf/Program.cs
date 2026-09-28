@@ -61,6 +61,15 @@ public static class Program
                 detailsWin.UpdateData(batteryService.CurrentSnapshot);
             }
 
+            // 打开卡片时主动补读一次。
+            //
+            // 为什么需要：轮询间隔默认 30 秒，用户"刚把鼠标动醒、马上点开卡片"
+            // 时看到的很可能是醒来之前那一轮的结果（"已休眠"），要等下一次定时
+            // 轮询才会变。这里立即发起一次刷新，卡片随即通过 SnapshotUpdated
+            // 拿到最新值（原生 fail-fast 后一次读取只要几十毫秒）。
+            // 若已有轮询在跑，BatteryService 会直接忽略这次请求。
+            batteryService?.RefreshNow();
+
             // 锚点优先使用托盘图标被按下时的光标位置：右键菜单弹出后菜单自身会位移，
             // 此时取 GetCursorPos 会把卡片定到菜单项那个错误的位置上。
             detailsWin.ToggleNear(anchorX, anchorY);

@@ -43,12 +43,37 @@ constexpr uint8_t kClientId = 0x0A;
 // 单次读电量要串起 4~6 次 HID 往返。若每个环节各自计时，
 // 一次"读电量"最坏能阻塞数秒（实测 Python 版曾达 4.7 秒）。
 // 因此全部调用共享一个总体 deadline。
-constexpr double kDefaultBudgetSec = 1.5;
+constexpr double kDefaultBudgetSec = 2.5;
 
-// 探测超时：不存在的配对槽位会一直等到超时（实测约 300ms）；
-// 在线设备中位应答约 57ms，但休眠唤醒时首帧可能慢到约 850ms。
-constexpr double kProbeTimeoutSec     = 0.12;
-constexpr double kPreferredProbeSec   = 0.60;
+// 探测超时（实测依据，改动前请先复核这几个数）：
+//   * 在线设备中位应答约 57ms；
+//   * **休眠唤醒时首帧可能慢到约 850ms**，且第一次请求可能直接失败；
+//   * 目标设备不可达时，带 HID++ 1.0 短报文应答的接收器会在 3~5ms 内回
+//     一条 UNKNOWN_DEVICE 错误帧（见 battery.h 的短报文判定一节）——
+//     认这条帧就不必再为这个槽位等满超时。
+//
+// 于是探测分两档：
+//   kQuickProbeSec    第 0 遍：快速过一遍全部槽位，指望短报文错误帧把空槽位
+//                     立刻排除掉。
+//   kPatientProbeSec  第 1 遍：对没能排除的槽位给足唤醒窗口 —— 必须覆盖上面
+//                     那个 850ms，否则唤醒中的设备永远等不到自己的应答。
+//   kMinPatientProbeSec 第 1 遍的下限。低于它就不叫"耐心等待"了，宁可少试
+//                     一个槽位。
+constexpr double kQuickProbeSec       = 0.10;
+constexpr double kPatientProbeSec     = 0.90;
+constexpr double kMinPatientProbeSec  = 0.35;
+
+// 同时轮询长/短两个集合时的读切片。短报文错误帧在 3~5ms 内到达，
+// 切片取 20ms 既够快又不会把 CPU 烧成空转。
+constexpr double kPollSliceSec        = 0.02;
+
+// 短集合单次读的切片。取 3ms 是为了对齐已验证的 Python 探针
+// （`h.read(64, timeout_ms=3)`）。
+//
+// 注意：切片短**不是**为了"少丢帧" —— 不丢帧靠的是 HidDevice::ReadFrame
+// 的常驻挂起读（见其注释）。切片短只是为了**尽早**拿到那条 3~5ms 就到的
+// 回绝帧，不必先白等一整个长窗口。真正决定不丢帧的是挂起读，别把两者搞混。
+constexpr double kShortReadSliceSec   = 0.003;
 
 // ---------------------------------------------------------------- 数据结构
 
