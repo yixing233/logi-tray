@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
+using MouseBatteryTray;
+
 namespace MultiTray;
 
 /// <summary>
@@ -154,14 +156,21 @@ public sealed class LogitechProvider : IBatteryProvider
             string status = m.Groups["status"].Value.Trim();
             bool charging = status.Contains("充电") || status.Contains("已充满");
 
+            // 原生状态位无法识别时给的是「未知 (0x12)」这类十六进制调试串，
+            // 对用户是天书；统一收成「充电状态未知」。
+            // 正常状态（「充电中（慢充）」「已充满」「充电异常」）原样保留 ——
+            // 它们比笼统的「充电中」信息更多，不该被抹平。
+            bool chargeKnown = status.Length > 0 && !status.StartsWith("未知", StringComparison.Ordinal);
+
             list.Add(new DeviceReading
             {
                 Name = m.Groups["name"].Value.Trim(),
                 Percent = pct,
                 Kind = GuessKind(m.Groups["name"].Value),
                 IsCharging = charging,
+                ChargeStateKnown = chargeKnown,
                 IsOnline = true,
-                StatusText = status,
+                StatusText = BatteryStatusText.For(online: true, chargeKnown, charging, status),
                 Source = inferred ? "HID++（推算）" : "HID++",
                 Key = "logitech:" + m.Groups["name"].Value.Trim(),
             });
@@ -326,9 +335,11 @@ public sealed class MchoseProvider : IBatteryProvider
             ChargeStateKnown = !string.IsNullOrEmpty(text),
             IsOnline = true,
             // 状态字节尚未校准，MchoseStatusText 返回空串。
-            // 此时退回电量档位文案（如「一般」），至少是有依据的信息，
-            // 而不是一个确定错了的「充电中」。
-            StatusText = string.IsNullOrEmpty(text) ? Protocols.LevelText(pct) : text,
+            // 这时不能说「充电中」（旧映射就是照抄上游猜的，两个方向都错过），
+            // 也不能退回电量档位（如「一般」）—— 那是卡片第二行的量纲，
+            // 混进状态位置会让几台设备没法横向比较。统一交给 BatteryStatusText：
+            // 它按 ChargeStateKnown 给出「充电状态未知」。
+            StatusText = BatteryStatusText.For(online: true, chargeStateKnown: !string.IsNullOrEmpty(text), charging),
             Source = source,
             Key = key,
         };
@@ -463,9 +474,12 @@ public sealed class AtkProvider : IBatteryProvider
                         Name = name,
                         Percent = pct,
                         Kind = GuessKind(name),
+                        // 协议 1 的应答里没有充电位，原先硬编码 false 等于凭空
+                        // 声称「正常放电中」。如实标成状态未知。
                         IsCharging = false,
+                        ChargeStateKnown = false,
                         IsOnline = true,
-                        StatusText = Protocols.LevelText(pct),
+                        StatusText = BatteryStatusText.For(online: true, chargeStateKnown: false, charging: false),
                         Source = $"ATK 协议1(rid=0x{rid:X2})",
                         Key = key,
                     };
@@ -499,9 +513,11 @@ public sealed class AtkProvider : IBatteryProvider
                             Name = name,
                             Percent = pct,
                             Kind = GuessKind(name),
+                            // 同协议 1：应答里没有充电位，不能硬说在放电。
                             IsCharging = false,
+                            ChargeStateKnown = false,
                             IsOnline = true,
-                            StatusText = Protocols.LevelText(pct),
+                            StatusText = BatteryStatusText.For(online: true, chargeStateKnown: false, charging: false),
                             Source = $"ATK 协议2({(wired ? "有线" : "无线")},rid=0x{rid:X2})",
                             Key = key,
                         };
@@ -582,7 +598,11 @@ public sealed class AtkProvider : IBatteryProvider
                 Kind = GuessKind(name),
                 IsCharging = charging,
                 IsOnline = true,
-                StatusText = charging ? "充电中" : Protocols.LevelText(pct),
+                // 以前是 charging ? "充电中" : LevelText(pct)：充电时给状态、
+                // 放电时给档位，同一行位置两个量纲。这正是用户截图里
+                // 「ATK Z87 Dongle 72% 良好」与「PRO X Wireless 73% 放电中」
+                // 对不上的原因。放电位是设备明确给的，走统一状态词。
+                StatusText = BatteryStatusText.For(online: true, chargeStateKnown: true, charging),
                 Source = "ATK Z87 键盘",
                 Key = key,
             };

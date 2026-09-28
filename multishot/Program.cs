@@ -41,6 +41,7 @@ internal static class Shot
                 failures += ShotCard(outDir);
                 failures += ShotSleepingCard(outDir);
                 failures += CheckHistoryText();
+                failures += CheckStatusText();
             }
             catch (Exception ex)
             {
@@ -560,6 +561,173 @@ internal static class Shot
             Console.WriteLine("[history] 休眠前电量文案自检通过 ✓");
         }
         return bad;
+    }
+
+    /// <summary>
+    /// 托盘提示第三段（充放电状态）的纯逻辑自检。
+    ///
+    /// 用户报告的原始症状：三个版本的悬停提示并排放，第三段量纲不同 ——
+    /// 多品牌版罗技那行是「放电中」，ATK 那行却是电量档位「良好」，
+    /// 完整版/轻量版干脆显示续航预测「（预计剩余使用 8 小时）」。
+    /// 这里把统一后的说法钉死，防止哪一版又自己拼字符串漂移回去。
+    ///
+    /// 断言不依赖窗口、不依赖真机，纯字符串比较。
+    /// </summary>
+    private static int CheckStatusText()
+    {
+        int bad = 0;
+
+        void Expect(string what, string actual, string expected)
+        {
+            if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            {
+                Console.WriteLine($"  !! [status] {what} 期望「{expected}」，实际「{actual}」");
+                bad++;
+            }
+        }
+
+        // 三种基本状态
+        Expect("充电",
+            BatteryStatusText.For(online: true, chargeStateKnown: true, charging: true),
+            "充电中");
+        Expect("放电",
+            BatteryStatusText.For(online: true, chargeStateKnown: true, charging: false),
+            "放电中");
+        Expect("离线",
+            BatteryStatusText.For(online: false, chargeStateKnown: true, charging: true),
+            BatteryStatusText.Sleeping);
+
+        // 状态位未校准（迈从耳机）：既不谎称充电，也不反过来断言放电
+        Expect("充电状态未知",
+            BatteryStatusText.For(online: true, chargeStateKnown: false, charging: false),
+            "充电状态未知");
+
+        // 原生给的更详细信息要保留，不能被笼统的「充电中」抹平
+        Expect("已充满原样保留",
+            BatteryStatusText.For(true, true, charging: true, detail: "已充满"),
+            "已充满");
+        Expect("慢充原样保留",
+            BatteryStatusText.For(true, true, charging: true, detail: "充电中（慢充）"),
+            "充电中（慢充）");
+        Expect("充电异常原样保留",
+            BatteryStatusText.For(true, true, charging: true, detail: "充电异常"),
+            "充电异常");
+
+        // 原生状态位无法识别时给「未知 (0x12)」这种十六进制调试串，
+        // 对用户是天书，必须收成「充电状态未知」。
+        Expect("十六进制调试串",
+            BatteryStatusText.For(true, true, charging: false, detail: "未知 (0x12)"),
+            "充电状态未知");
+
+        // 关键回归：电量档位词混进状态位置时不得原样透出。
+        // 「充足」含「充」，若用 Contains("充") 判断会被当成状态词。
+        Expect("档位词不得当状态显示",
+            BatteryStatusText.For(true, true, charging: false, detail: "充足"),
+            "放电中");
+        Expect("档位词良好不得当状态显示",
+            BatteryStatusText.For(true, true, charging: true, detail: "良好"),
+            "充电中");
+
+        // IsChargeWord 的前缀判定
+        if (!BatteryStatusText.IsChargeWord("充电中") ||
+            !BatteryStatusText.IsChargeWord("放电中") ||
+            !BatteryStatusText.IsChargeWord("已充满"))
+        {
+            Console.WriteLine("  !! [status] 正常状态词应被判为状态词");
+            bad++;
+        }
+        if (BatteryStatusText.IsChargeWord("充足") ||
+            BatteryStatusText.IsChargeWord("良好") ||
+            BatteryStatusText.IsChargeWord("一般"))
+        {
+            Console.WriteLine("  !! [status] 电量档位词不得被判为状态词");
+            bad++;
+        }
+
+        // 离线优先于一切：设备都没应答，不该报任何充放电状态
+        Expect("离线优先于详情",
+            BatteryStatusText.For(online: false, chargeStateKnown: true, charging: true,
+                                  detail: "充电中"),
+            BatteryStatusText.Sleeping);
+
+        // 三版共用的字面量，改一处必须三版一起动
+        Expect("充电常量", BatteryStatusText.Charging, "充电中");
+        Expect("放电常量", BatteryStatusText.Discharging, "放电中");
+        Expect("未知常量", BatteryStatusText.ChargeUnknown, "充电状态未知");
+        Expect("休眠常量", BatteryStatusText.Sleeping, "已休眠");
+
+        // 托盘提示整行：名称  电量%  状态。
+        // 这是三版共用的格式函数 —— 用户拿到的三份提示因此逐字同构。
+        // 格式里用双空格分隔，与多品牌版原本的写法一致。
+        Expect("在线行",
+            BatteryStatusText.DeviceLine("PRO X Wireless", 73, true, true, false),
+            "PRO X Wireless  73%  放电中");
+        Expect("充电行",
+            BatteryStatusText.DeviceLine("PRO X Wireless", 73, true, true, true),
+            "PRO X Wireless  73%  充电中");
+        Expect("离线行电量位置显示 --%",
+            BatteryStatusText.DeviceLine("PRO X Wireless", -1, false, true, false),
+            "PRO X Wireless  --%  已休眠");
+        Expect("状态未知行",
+            BatteryStatusText.DeviceLine("MCHOSE V9 PRO", 100, true, false, false),
+            "MCHOSE V9 PRO  100%  充电状态未知");
+        // 档位词不得泄进提示行 —— 这是用户报告的那个 bug 的整行回归
+        Expect("档位词不泄进提示行",
+            BatteryStatusText.DeviceLine("ATK Z87 Dongle", 72, true, true, false, "良好"),
+            "ATK Z87 Dongle  72%  放电中");
+        // 离线设备即使带着状态词，也只能说「已休眠」
+        Expect("离线行不带状态词",
+            BatteryStatusText.DeviceLine("PRO X Wireless", -1, false, true, false, "充电中"),
+            "PRO X Wireless  --%  已休眠");
+
+        // 原生行「冒号之后」的判定顺序。这段判定以前埋在 BatteryService 的
+        // 解析循环里、没有任何断言覆盖 —— 而顺序写错不会报错，只会安静地
+        // 说错话，所以在这里用合成字符串钉死每一条分支。
+        CheckTail("完整行：放电中 · 良好", " 73% · 放电中 · 良好", "放电中", false, "良好");
+        // 「已充满」里不含「充电」这个连续子串，若先判「充电」，
+        // 插着线的鼠标就会被说成在放电 —— 这条是全表里最重要的一条。
+        CheckTail("完整行：已充满", " 100% · 已充满 · 满", "已充满", false, "满");
+        CheckTail("完整行：充电中", " 64% · 充电中", "充电中", true, "良好");
+        CheckTail("完整行：慢充", " 64% · 充电中（慢充）", "充电中", true, "良好");
+        // 原生状态位无法识别时给的是调试串；漏掉这条分支，
+        // 状态词会停在初值「放电中」，界面替设备宣称在放电。
+        CheckTail("完整行：状态位未知", " 50% · 未知 (0x12)", "未知", false, "良好");
+        CheckTail("完整行：满（放电）", " 88% · 放电中 · 满", "放电中", false, "满");
+        CheckTail("完整行：仅档位", " 88% · 良好", "放电中", false, "良好");
+        CheckTail("完整行：什么都没有", " 88%", "放电中", false, "良好");
+        // 「充满」优先于「满」：都是满，但插着线和没插线是两回事
+        CheckTail("充满优先于满", " 100% · 已充满", "已充满", false, "满");
+
+        if (bad == 0)
+        {
+            Console.WriteLine("[status] 充放电状态文案自检通过 ✓");
+        }
+        return bad;
+
+        void CheckTail(string what, string tail, string status, bool charging, string level)
+        {
+            var got = BatteryStatusText.FromNativeTail(tail);
+            if (got.StatusText != status || got.IsCharging != charging || got.LevelText != level)
+            {
+                Console.WriteLine($"  !! [status] {what} 期望「{status}/{charging}/{level}」，" +
+                    $"实际「{got.StatusText}/{got.IsCharging}/{got.LevelText}」");
+                bad++;
+                return;
+            }
+
+            // 提示行必须与解析结果自洽：档位词不得因解析而泄进状态位。
+            // 比的是状态**那一段**而不是子串包含 —— 档位「满」本来就是
+            // 状态词「已充满」的一部分，用 Contains 会把它误判成泄漏。
+            string line = BatteryStatusText.DeviceLine("PRO X Wireless", 73, true, true,
+                                                       got.IsCharging, got.StatusText);
+            int sep = line.LastIndexOf("  ", StringComparison.Ordinal);
+            string slot = sep >= 0 ? line[(sep + 2)..] : line;
+            if (slot == got.LevelText && !BatteryStatusText.IsChargeWord(got.LevelText))
+            {
+                Console.WriteLine($"  !! [status] {what} 档位词「{got.LevelText}」泄进了状态位：「{line}」");
+                bad++;
+            }
+        }
     }
 
     /// <summary>卡片应展示每台设备的名称与电量，缺任意一台都算失败。</summary>

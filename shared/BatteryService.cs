@@ -187,29 +187,14 @@ public sealed class BatteryService : IDisposable
                         // 状态与档位文字只看冒号之后的电量区，避免设备名里的
                         // 字（如 "PRO"、"满"）干扰判断。
                         //
-                        // 注意顺序：「已充满」里并不含「充电」这个连续子串，
-                        // 若先判「充电」会漏掉满电状态，把插着线的鼠标显示成
-                        // 放电中，因此必须把充满放在最前面判定。
-                        if (tail.Contains("充满"))
-                        {
-                            statusText = "已充满";
-                            isCharging = false;
-                            levelText = "满";
-                        }
-                        else if (tail.Contains("充电"))
-                        {
-                            statusText = "充电中";
-                            isCharging = true;
-                        }
-                        else if (tail.Contains("满"))
-                        {
-                            statusText = "放电中";
-                            levelText = "满";
-                        }
-                        else if (tail.Contains("良好"))
-                        {
-                            levelText = "良好";
-                        }
+                        // 判定顺序（「已充满」必须排在「充电」之前，否则插着线
+                        // 的鼠标会被说成放电中）与「未知 (0x12)」的收口都放在
+                        // BatteryStatusText.FromNativeTail 里，那里能用合成字符串
+                        // 离线断言 —— 顺序写错不会报错，只会安静地说错话。
+                        var parsed = BatteryStatusText.FromNativeTail(tail, levelText);
+                        statusText = parsed.StatusText;
+                        isCharging = parsed.IsCharging;
+                        levelText = parsed.LevelText;
                         break;
                     }
                 }
@@ -238,6 +223,10 @@ public sealed class BatteryService : IDisposable
             IsCharging = isCharging,
             IsConnected = percent > 0,
             LevelText = levelText,
+            // 状态词以前传进来就被丢了，托盘提示因此没有充放电状态可显示。
+            // 这里如实带上；离线时它可能是初值「放电中」，但显示层会先看
+            // IsConnected，离线一律说「已休眠」，不会把初值当成读数报出去。
+            StatusText = statusText,
             LastUpdatedText = DateTime.Now.ToString("HH:mm")
         };
 

@@ -34,6 +34,7 @@
       否则 BatteryHistory 转发过去时会找不到 BatteryHistoryText。
     -->
     <Compile Include="..\shared\BatteryHistoryText.cs" LinkBase="Shared" />
+    <Compile Include="..\shared\BatteryStatusText.cs" LinkBase="Shared" />
     <Compile Include="..\shared\UnmanagedMethods.cs" LinkBase="Shared" />
     <!-- 三个版本共用同一套「检查更新」逻辑：各自比对属于自己的资产版本号 -->
     <Compile Include="..\shared\UpdateChecker.cs" LinkBase="Shared" />

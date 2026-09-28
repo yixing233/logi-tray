@@ -159,7 +159,10 @@ internal static class Program
         foreach (var r in readings)
         {
             string pct = r.Percent >= 0 ? $"{r.Percent,3}%" : "  --";
-            string state = r.IsOnline ? r.StatusText : "已休眠/离线";
+            // 状态词与提示行共用同一个来源，避免控制台与托盘两种说法。
+            string state = r.IsOnline
+                ? BatteryStatusText.For(true, r.ChargeStateKnown, r.IsCharging, r.StatusText)
+                : "已休眠/离线";
             if (r.HasLastKnown)
             {
                 state += $"（上次 {r.LastKnownPercent}%，"
@@ -422,7 +425,13 @@ internal sealed class TrayContext : IDisposable
             var lines = new List<string> { "multi-tray" };
             foreach (var r in online)
             {
-                lines.Add($"{r.Name}  {r.Percent}%  {r.StatusText}");
+                // 每行走共享的 DeviceLine：与完整版/轻量版逐字同构。
+                // provider 已经统一过状态词，这里是兜底 —— 万一哪个 provider
+                // 又把电量档位（「良好」「充足」）塞进 StatusText，提示里
+                // 也只会出现「放电中」，不会再混量纲。
+                lines.Add(BatteryStatusText.DeviceLine(
+                    r.Name, r.Percent, r.IsOnline, r.ChargeStateKnown,
+                    r.IsCharging, r.StatusText));
             }
             // 托盘提示上限约 127 字符，超出会被截断
             text = string.Join("\n", lines);

@@ -196,9 +196,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             UpdateIcon(snapshot.Percent, snapshot.IsCharging);
         }
 
-        string tooltip = snapshot.Percent >= 0
-            ? $"{snapshot.DeviceName}: {snapshot.Percent}% ({snapshot.RemainingTimeText})"
-            : $"{snapshot.DeviceName}: 离线或休眠";
+        // 第三段统一成「在充电还是在放电」，与完整版、多品牌版逐字一致。
+        // 这里原先是 RemainingTimeText（续航预测），与多品牌版的「放电中」
+        // 量纲不同，三个版本的提示没法横向看。整行由
+        // BatterySnapshot.TooltipLine 给出，不在这一层拼字符串。
+        string tooltip = snapshot.TooltipLine;
 
         // 悬停提示也补上「睡前还剩多少」：卡片要打开才看得到，
         // 而这里一眼就能看到。措辞与多品牌版一致。
