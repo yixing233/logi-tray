@@ -32,6 +32,11 @@ __pycache__/
 /wpf_test/
 /_shots/
 
+# ---- tools/verify_layout.py 就地生成的测量工程（每次运行重新生成）----
+/_measure/
+/_measure2/
+/_measure3/
+
 # ---- multishot 离屏自检渲染出的截图（每次运行重新生成）----
 /card/
 /all/
