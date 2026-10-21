@@ -238,18 +238,24 @@ public sealed class BatteryService : IDisposable
             // 因此这里也要走一次裁剪与落盘，否则文件永远不会被压缩。
             double nowUtcEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-            if (_samples.Count == 0)
-            {
-                // 没有任何历史样本：直接返回，下面的兜底文案稍后统一处理
-            }
-            else
+            // 进入本段的条件是「本轮读到了电量」或「已有历史可回填」。
+            //
+            // 旧实现在这里写的是 `if (_samples.Count == 0) { /* 直接返回 */ } else { … }`，
+            // 而 20 秒门槛那层又直接取 `_samples[^1]` —— 于是列表为空时既进不了追加
+            // 分支，也没法凭空产生第一条样本：空 → 不追加 → 仍空，自举死锁。
+            // 更糟的是 history.json 只由 MaybePersist（同一分支内）写出，所以文件
+            // 永远不会被创建，缺陷无法自愈。升级上来的机器因为文件早已存在而绕过了
+            // 它，只有全新安装 / 删过数据目录的机器会一直停在「放电数据积累中」
+            // （实测：读到 67% 的机器跑了几十轮，`_samples` 仍是 0 条）。
+            if (percent > 0 || _samples.Count > 0)
             {
                 double nowEpoch = nowUtcEpoch;
 
                 if (percent > 0)
                 {
-                    // 距离上个样本超过 20 秒才记录，避免密集轮询把文件撑大
-                    if (nowEpoch - _samples[^1].T >= 20)
+                    // 距离上个样本超过 20 秒才记录，避免密集轮询把文件撑大。
+                    // 列表为空时必须无条件收下第一条，否则见上面那段自举死锁。
+                    if (_samples.Count == 0 || nowEpoch - _samples[^1].T >= 20)
                     {
                         _samples.Add((nowEpoch, percent, isCharging));
                     }
