@@ -146,12 +146,11 @@ public sealed class MultiSettings
         try
         {
             string path = ConfigPath;
-            System.IO.Directory.CreateDirectory(
-                System.IO.Path.GetDirectoryName(path)!);
             var opt = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
             string json = System.Text.Json.JsonSerializer.Serialize(this, opt);
             // 不写 BOM：带 BOM 会让 JSON 反序列化失败
-            System.IO.File.WriteAllText(path, json, new System.Text.UTF8Encoding(false));
+            // 原子写：写了一半崩掉会让下次 Load 静默回落成出厂设置
+            AtomicFile.WriteAllText(path, json, new System.Text.UTF8Encoding(false));
         }
         catch { }
     }

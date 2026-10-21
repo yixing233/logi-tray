@@ -91,7 +91,7 @@ public static class Protocols
     /// 尚未观测到 0x01、0x03（旧猜测里「已充满」用的就是 3，**无任何依据**）。
     /// 对未观测到的取值一律返回空文案，由调用方按「状态未知」显示 ——
     /// 宁可说不知道，也不再给出一个确定错了的状态：虚假的「充电中」还会
-    /// 连带压掉低电量提醒（见 <see cref="ShouldNotify"/>）。
+    /// 连带压掉低电量提醒（见 <see cref="ThresholdLevel"/>）。
     ///
     /// 要补上「已充满」这一档，请在满电时采样：`multi-tray.exe --diag-mchose watch`。
     /// </summary>
@@ -285,18 +285,21 @@ public static class Protocols
     };
 
     /// <summary>
-    /// 判断是否应触发低电量通知。
+    /// 电量落在哪一档：0 = 正常，1 = 低电量，2 = 严重低电量。
     ///
-    /// 规则：电量必须已读到（&gt;=0）、不在充电、且不超过阈值。
-    /// 另外要求 <paramref name="lastNotifiedPercent"/> 与当前值不同，
-    /// 以免同一个电量每轮都重复提醒 —— 这是低电量预警最容易出问题的地方。
+    /// 调用方只在**层级上升**时提醒一次，因此 20% → 19% → 18% 不会连弹三次。
+    /// 早先这里返回布尔（“与上次已通知的电量不同就提醒”），结果是电量每降
+    /// 1% 就弹一次气泡 —— 低电量期间用户会被连续骚扰十几次。完整版/轻量版
+    /// 用的是“跨阈值一次”的语义（见 BatteryService.CheckAlerts 的 _hasAlertedLow），
+    /// 三版行为必须一致。
+    ///
+    /// 充电中与无读数（&lt; 0）一律返回 0：状态不明确时不越权报警。
     /// </summary>
-    public static bool ShouldNotify(int percent, bool charging, int threshold,
-                                    int lastNotifiedPercent)
+    public static int ThresholdLevel(int percent, int lowThreshold, int criticalThreshold)
     {
-        if (percent < 0) return false;
-        if (charging) return false;
-        if (percent > threshold) return false;
-        return percent != lastNotifiedPercent;
+        if (percent < 0) return 0;
+        if (percent <= criticalThreshold) return 2;
+        if (percent <= lowThreshold) return 1;
+        return 0;
     }
 }

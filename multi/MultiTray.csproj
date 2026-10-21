@@ -27,6 +27,12 @@
     <!-- 与罗技版共用同一套身份/自启/配色源码，避免三份实现漂移 -->
     <Compile Include="..\shared\AppIdentity.cs" LinkBase="Shared" />
     <Compile Include="..\shared\AppPalette.cs" LinkBase="Shared" />
+    <!--
+      原子覆盖写（临时文件 + File.Replace）。设置与「休眠前电量」历史都要用它：
+      File.WriteAllText 写到一半被强杀会留下半截 JSON，而两处 Load 都是静默
+      回落 —— 用户会无声无息地丢掉全部设置与记忆。
+    -->
+    <Compile Include="..\shared\AtomicFile.cs" LinkBase="Shared" />
     <Compile Include="..\shared\AutoStartService.cs" LinkBase="Shared" />
     <!--
       「休眠前最后一次电量」小字的文案。完整版/轻量版靠 ..\shared\*.cs 通配符

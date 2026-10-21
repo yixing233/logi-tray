@@ -177,15 +177,13 @@ end;
 
 function DetectNet8DesktopRuntime(): String;
 begin
-  // 用绝对路径而不是 commonpf 常量：它指向 Program Files 还是 Program Files (x86)
-  // 取决于安装模式，两个位置都查一遍最省心。
+  { 只认 64 位那一份。
+
+    安装包本身是 ArchitecturesAllowed=x64compatible，程序也是 x64；
+    只装了 x86 版 .NET 8 的机器根本跑不起来。早先这里把 Program Files (x86)
+    也当作命中，于是 x86-only 的机器会“检测通过”，装完双击却没反应。 }
   Result := FindNet8InSharedDir(
     ExpandConstant('{sd}\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App'));
-  if Result <> '' then
-    Exit;
-
-  Result := FindNet8InSharedDir(
-    ExpandConstant('{sd}\Program Files (x86)\dotnet\shared\Microsoft.WindowsDesktop.App'));
 end;
 
 { -------------------------------------------------------------------------
@@ -347,9 +345,18 @@ begin
 
   if CurStep = ssPostInstall then
   begin
-    { 只在用户确实装了这一版时才动自启项；取消勾选则顺手删掉旧安装留下的同名项，
-      否则重装成「不自启」之后，老的 Run 项还会把人拽起来。 }
-    SetAutoStart(WizardIsTaskSelected('autostart'));
+    { 只在用户勾了「开机自动启动」时**写入**；**不在安装时删除**已存在的自启项。
+
+      任务页默认不勾（首次安装不该替用户做决定），但“这次没勾”并不等于
+      “用户想关掉自启”——早先这里无条件 SetAutoStart(WizardIsTaskSelected(...))，
+      于是覆盖安装一次就把用户已经在程序里开好的 Run 项删掉了；静默部署
+      （/VERYSILENT）下更不会被随后的启动补回来。
+
+      安装完成后自启状态以程序内的设置为准（启动时 AutoStartService 会按
+      settings.json 落盘/清除，并自动修正被移动过的程序路径），卸载时仍会
+      清理，不会留下指向已删文件的 Run 项。 }
+    if WizardIsTaskSelected('autostart') then
+      SetAutoStart(True);
   end;
 
   if CurStep = ssDone then

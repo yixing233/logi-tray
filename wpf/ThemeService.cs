@@ -68,7 +68,7 @@ public static class ThemeService
     {
         if (IsAcrylicEnabled == enabled) return;
         IsAcrylicEnabled = enabled;
-        ThemeChanged?.Invoke();
+        RaiseThemeChanged();
     }
 
     public static Brush SolidSurfaceBrush => CurrentTheme == AppTheme.Dark
@@ -83,11 +83,41 @@ public static class ThemeService
             {
                 if (ConfiguredThemeMode == "system")
                 {
-                    ThemeChanged?.Invoke();
+                    RaiseThemeChanged();
                 }
             };
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 统一从**界面线程**派发主题变化。
+    ///
+    /// 为什么必须收口在这里：<c>SystemEvents.UserPreferenceChanged</c> 是在系统
+    /// 事件线程上回调的，早先直接 <c>ThemeChanged?.Invoke()</c> 就等于在非 UI
+    /// 线程上驱动所有订阅者。窗口那边自己做了 <c>Dispatcher.Invoke</c>，但
+    /// 托盘图标与右键菜单（NotifyIcon / ToolStripMenuItem）不是 DependencyObject、
+    /// 没有跨线程检查 —— 它们会被两个线程同时改，轻则图标闪错，重则两个线程
+    /// 各自销毁同一个 HICON。这里集中 marshal，订阅者就不必各写一遭，也不会
+    /// 再有人忘了写。
+    /// </summary>
+    private static void RaiseThemeChanged()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess())
+        {
+            ThemeChanged?.Invoke();
+            return;
+        }
+
+        try
+        {
+            dispatcher.BeginInvoke(new Action(() => ThemeChanged?.Invoke()));
+        }
+        catch
+        {
+            // Dispatcher 已关闭：应用正在退出，不必再刷主题
+        }
     }
 
     public static AppTheme CurrentTheme
@@ -104,7 +134,7 @@ public static class ThemeService
     {
         if (ConfiguredThemeMode == mode) return;
         ConfiguredThemeMode = mode;
-        ThemeChanged?.Invoke();
+        RaiseThemeChanged();
     }
 
     public static bool IsSystemDark() => AppPalette.IsSystemDark();

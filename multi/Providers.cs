@@ -45,6 +45,17 @@ public static class DeviceReader
     /// 而让整个界面空掉。
     /// </summary>
     public static List<DeviceReading> ReadAll(MultiSettings settings)
+        => ReadAll(settings.EnabledSources);
+
+    /// <summary>
+    /// 同上，但直接收「启用的来源 ID」而不收整个设置对象。
+    ///
+    /// 为什么需要这个重载：本方法现在在**后台线程**上跑（它内部是同步 HID I/O，
+    /// 跑在界面线程上会冻结托盘与卡片 1.5~2.5 秒）。而启用来源列表会被设置窗口
+    /// 在界面线程上 Clear/Add，直接把 <c>settings</c> 传到后台去读就是数据竞争。
+    /// 调用方在界面线程上抓一份快照再传进来，两边互不干扰。
+    /// </summary>
+    public static List<DeviceReading> ReadAll(IReadOnlyCollection<string> enabledSources)
     {
         var results = new List<DeviceReading>();
         IReadOnlyList<Hid.HidInterface> interfaces;
@@ -60,7 +71,7 @@ public static class DeviceReader
 
         foreach (var provider in All)
         {
-            if (!settings.EnabledSources.Contains(provider.Id)) continue;
+            if (!enabledSources.Contains(provider.Id)) continue;
             try
             {
                 var r = provider.Read(interfaces);
@@ -226,8 +237,27 @@ public sealed class LogitechProvider : IBatteryProvider
             using var p = Process.Start(psi);
             if (p == null) return null;
 
-            string stdout = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(8000);
+            // 两个管道必须**同时**读。
+            //
+            // 早先是 `StandardOutput.ReadToEnd()` 再 `WaitForExit(8000)`：
+            //   * stderr 被重定向了却从不读，子进程一旦往里写满管道缓冲（约 4KB）
+            //     就阻塞在写，而我们在 ReadToEnd 里阻塞着等它退出 —— 双方互等；
+            //   * ReadToEnd 本身就会一直等到子进程关闭 stdout（基本等于退出），
+            //     所以后面的 WaitForExit(8000) 永远不会“超时”，形同虚设。
+            // 改为两个异步读 + 真正有超时的 WaitForExit，超时就杀掉子进程。
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+
+            if (!p.WaitForExit(8000))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+                try { stdoutTask.GetAwaiter().GetResult(); } catch { }
+                try { stderrTask.GetAwaiter().GetResult(); } catch { }
+                return null;
+            }
+
+            string stdout = stdoutTask.GetAwaiter().GetResult();
+            try { _ = stderrTask.GetAwaiter().GetResult(); } catch { }
             return stdout;
         }
         catch

@@ -478,36 +478,42 @@ public static class ProtocolTests
         CheckEq("100 充足", Protocols.LevelText(100), "充足");
     }
 
-    // ───────────── 低电量通知去重 ─────────────
+    // ───────────── 低电量通知分级 ─────────────
 
     private static void TestNotifyDedup()
     {
         Console.WriteLine("\n[低电量通知]");
 
-        // 正常触发：低于阈值、未充电、与上次不同
-        Check("15% 阈值20 应通知",
-            Protocols.ShouldNotify(15, false, 20, -1));
-        // 已通知过同一电量，不再重复
-        Check("15% 已通知过则不再通知",
-            !Protocols.ShouldNotify(15, false, 20, 15));
-        // 电量继续下降，应再次通知
-        Check("降到 12% 应再次通知",
-            Protocols.ShouldNotify(12, false, 20, 15));
-        // 充电中不通知
-        Check("充电中不通知",
-            !Protocols.ShouldNotify(15, true, 20, -1));
-        // 高于阈值不通知
-        Check("25% 超阈值不通知",
-            !Protocols.ShouldNotify(25, false, 20, -1));
-        // 恰好等于阈值应通知
-        Check("恰好 20% 应通知",
-            Protocols.ShouldNotify(20, false, 20, -1));
-        // 未读到电量不通知
-        Check("-1 不通知",
-            !Protocols.ShouldNotify(-1, false, 20, -1));
-        // 严重阈值也走同一逻辑
-        Check("5% 严重阈值应通知",
-            Protocols.ShouldNotify(5, false, 10, -1));
+        // 层级划分：正常 / 低电量 / 严重
+        CheckEq("25% 属于正常", Protocols.ThresholdLevel(25, 20, 10), 0);
+        CheckEq("15% 属于低电量", Protocols.ThresholdLevel(15, 20, 10), 1);
+        CheckEq("恰好 20% 算低电量", Protocols.ThresholdLevel(20, 20, 10), 1);
+        CheckEq("10% 属于严重", Protocols.ThresholdLevel(10, 20, 10), 2);
+        CheckEq("5% 属于严重", Protocols.ThresholdLevel(5, 20, 10), 2);
+        CheckEq("未读到电量不分级", Protocols.ThresholdLevel(-1, 20, 10), 0);
+
+        // 去重语义：提醒只在层级**上升**时发生。
+        // 模拟 21% → 20% → 19% → 18% → 9% 这条放电曲线，
+        // 期望只在 20%、10% 两个点各提醒一次，而不是每降 1% 弹一次。
+        int[] curve = { 21, 20, 19, 18, 17, 12, 11, 10, 9, 8 };
+        int last = 0;
+        var firedAt = new List<int>();
+        foreach (int pct in curve)
+        {
+            int level = Protocols.ThresholdLevel(pct, 20, 10);
+            if (level > last)
+            {
+                firedAt.Add(pct);
+                last = level;
+            }
+        }
+
+        CheckEq("整段放电只提醒两次", firedAt.Count, 2);
+        CheckEq("第一次提醒在 20%", firedAt.Count > 0 ? firedAt[0] : -1, 20);
+        CheckEq("第二次提醒在 10%", firedAt.Count > 1 ? firedAt[1] : -1, 10);
+
+        // 充完电回到正常后，下次低电量应能重新提醒
+        CheckEq("充满后回到正常层", Protocols.ThresholdLevel(100, 20, 10), 0);
     }
 
     // ───────────── 休眠前电量记忆 ─────────────

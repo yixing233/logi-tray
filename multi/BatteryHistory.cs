@@ -229,11 +229,12 @@ public static class BatteryHistory
         try
         {
             string path = FilePath;
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             string json = JsonSerializer.Serialize(map,
                 new JsonSerializerOptions { WriteIndented = true });
-            // 不写 BOM：带 BOM 会让下次反序列化失败（settings.json 的同类坑）
-            File.WriteAllText(path, json, new UTF8Encoding(false));
+            // 不写 BOM：带 BOM 会让下次反序列化失败（settings.json 的同类坑）。
+            // 原子写：写到一半被强杀时，下一轮读到的要么是旧记忆、要么是新记忆，
+            // 而不是一个只能被 catch 当成「文件损坏」丢掉半截 JSON。
+            AtomicFile.WriteAllText(path, json, new UTF8Encoding(false));
         }
         catch
         {

@@ -116,6 +116,59 @@ public static class UnmanagedMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+    public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    /// <summary>
+    /// 取指定屏幕坐标所在**那一块**显示器的工作区（物理像素，已排除任务栏）。
+    ///
+    /// 托盘卡片的定位必须用它，而不是 <c>SystemParameters.WorkArea</c>：后者
+    /// 永远返回**主屏**的工作区，用户把任务栏放在副屏时，卡片会被画到另一块
+    /// 屏幕上，看起来像「点了图标却在别处弹出」。
+    /// </summary>
+    public static bool TryGetMonitorWorkArea(int x, int y, out RECT workArea)
+    {
+        workArea = default;
+
+        try
+        {
+            var pt = new POINT { X = x, Y = y };
+            IntPtr monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+            if (monitor == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (!GetMonitorInfo(monitor, ref info))
+            {
+                return false;
+            }
+
+            workArea = info.rcWork;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
 

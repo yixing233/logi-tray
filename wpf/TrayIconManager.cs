@@ -168,11 +168,22 @@ public sealed class TrayIconManager : IDisposable
         UpdateThemeChecks();
         UpdateIcon(-1, false);
 
-        ThemeService.ThemeChanged += () =>
-        {
-            UpdateThemeChecks();
-            UpdateIcon(_lastPercent, _lastCharging);
-        };
+        // 用命名方法订阅，Dispose 时才能取消（匿名 lambda 无法取消）
+        ThemeService.ThemeChanged += OnThemeChanged;
+    }
+
+    /// <summary>
+    /// 系统/手动主题变化：刷新菜单勾选与图标配色。
+    ///
+    /// ThemeService 已经统一从界面线程派发（见 RaiseThemeChanged），因此这里不再
+    /// 自己 marshal；但NotifyIcon 与 ToolStripMenuItem 都不是 Control，
+    /// 如果哪天有人在后台线程直接调 ThemeChanged，这两行会在两个线程上同时
+    /// 改同一批 GDI 对象 —— 所以派发必须集中在 ThemeService 那一处。
+    /// </summary>
+    private void OnThemeChanged()
+    {
+        UpdateThemeChecks();
+        UpdateIcon(_lastPercent, _lastCharging);
     }
 
     public void SetThemeMode(string mode, bool notifyCallback = false)
@@ -228,20 +239,10 @@ public sealed class TrayIconManager : IDisposable
         // 与多品牌版的「放电中」根本不是一回事：三个版本的提示并排放，
         // 第三段一个是时长、一个是状态，没法横向看。
         //
-        // 整行由 BatterySnapshot.TooltipLine 给出，不在这一层拼字符串 ——
-        // 完整版与轻量版原先逐字重复这段代码，再各写一份早晚又漂移。
-        string tooltip = snapshot.TooltipLine;
-
-        // 悬停提示也补上「睡前还剩多少」：卡片要打开才看得到，
-        // 而这里一眼就能看到。措辞与多品牌版一致。
-        if (snapshot.HasLastKnown)
-        {
-            tooltip += $"（上次 {snapshot.LastKnownPercent}%，" +
-                $"{BatteryHistoryText.FormatAge(snapshot.LastKnownAt!.Value, DateTime.Now)}）";
-        }
-
-        if (tooltip.Length > 63) tooltip = tooltip[..63];
-        _notifyIcon.Text = tooltip;
+        // 整行（含「上次 77%，2 小时前」小字）由 BatterySnapshot.TooltipText
+        // 统一拼装并做预算感知的裁剪，不在这一层拼字符串、也不再在这里
+        // 用 tooltip[..63] 硬截 —— 那会把电量或状态词从中间切掉。
+        _notifyIcon.Text = snapshot.TooltipText;
     }
 
     public void ShowNotification(string title, string text)
@@ -394,7 +395,9 @@ public sealed class TrayIconManager : IDisposable
         var box = new GdiRectangleF(cx - r, cy - r, r * 2, r * 2);
 
         // 1. 底轨 (微透半透明轨道环)
-        GdiColor trackColor = ThemeService.IsSystemDark()
+        // 用当前**启用**的主题（可能是用户强制指定的深/浅色），而不是系统主题：
+        // 写 IsSystemDark() 会让「强制深色 + 系统浅色」时轨道色与整图其它部分对不上。
+        GdiColor trackColor = ThemeService.CurrentTheme == AppTheme.Dark
             ? GdiColor.FromArgb(60, 255, 255, 255)
             : GdiColor.FromArgb(45, 0, 0, 0);
 
@@ -454,7 +457,8 @@ public sealed class TrayIconManager : IDisposable
         }
 
         // 2. 底部 2px 细微电量比例横轨
-        GdiColor trackColor = ThemeService.IsSystemDark()
+        // 同样跟「当前启用的主题」走，而不是系统主题（理由见 DrawRingIcon）
+        GdiColor trackColor = ThemeService.CurrentTheme == AppTheme.Dark
             ? GdiColor.FromArgb(60, 255, 255, 255)
             : GdiColor.FromArgb(40, 0, 0, 0);
 
@@ -663,6 +667,7 @@ public sealed class TrayIconManager : IDisposable
 
     public void Dispose()
     {
+        ThemeService.ThemeChanged -= OnThemeChanged;
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _contextMenu.Dispose();

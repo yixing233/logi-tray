@@ -44,6 +44,13 @@ public sealed class MouseBatteryDetailsWindow : Window
 
     /// <summary>当前锚点的屏幕 X（物理像素）与是否已有有效锚点。</summary>
     private double _anchorX;
+
+    /// <summary>
+    /// 锚点的 Y（物理像素）。判断“锚点在哪块显示器上”必须用 Y：
+    /// 多屏上下排布时，仅凭 X 无法区分两块屏。
+    /// </summary>
+    private double _anchorY;
+
     private bool _hasAnchor;
 
     public MouseBatteryDetailsWindow(Action? onOpenSettings = null)
@@ -152,7 +159,7 @@ public sealed class MouseBatteryDetailsWindow : Window
         _adjustingPosition = true;
         try
         {
-            ApplyPlacement(_anchorX, currentHeight);
+            ApplyPlacement(_anchorX, _anchorY, currentHeight);
         }
         finally
         {
@@ -164,9 +171,10 @@ public sealed class MouseBatteryDetailsWindow : Window
     /// 唯一的定位实现：水平对齐锚点、垂直贴任务栏上方，
     /// 并在隐藏图标浮出面板展开时整体抬到面板之上。
     /// </summary>
-    private void ApplyPlacement(double anchorX, double cardHeight)
+    private void ApplyPlacement(double anchorX, double anchorY, double cardHeight)
     {
         _anchorX = anchorX;
+        _anchorY = anchorY;
         _hasAnchor = true;
 
         // Win32 返回的锚点与托盘溢出面板矩形是物理像素；WPF 窗口位置、工作区和尺寸是 DIP。
@@ -176,12 +184,31 @@ public sealed class MouseBatteryDetailsWindow : Window
         double scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
         double anchorDipX = anchorX / scaleX;
 
-        var wa = SystemParameters.WorkArea;
-        double minLeft = wa.Left + 8;
-        double maxLeft = wa.Right - CardWidth - 8;
+        // 用锚点所在**那一块**显示器的工作区，而不是主屏的：
+        // SystemParameters.WorkArea 永远返回主屏（还带主屏 DPI 的 DIP 换算），
+        // 用户把任务栏放在副屏时，卡片会被画到另一块屏幕的任务栏上方 ——
+        // 表现为「点了图标，卡片却在别的屏弹出」。
+        // Win32 给的是物理像素，除以与 anchorDipX 相同的 scale 换成 DIP，
+        // 两者始终处在同一个坐标系里。
+        var primary = SystemParameters.WorkArea;
+        double waLeft = primary.Left;
+        double waTop = primary.Top;
+        double waRight = primary.Right;
+        double waBottom = primary.Bottom;
+
+        if (UnmanagedMethods.TryGetMonitorWorkArea((int)anchorX, (int)anchorY, out var monitor))
+        {
+            waLeft = monitor.Left / scaleX;
+            waTop = monitor.Top / scaleY;
+            waRight = monitor.Right / scaleX;
+            waBottom = monitor.Bottom / scaleY;
+        }
+
+        double minLeft = waLeft + 8;
+        double maxLeft = waRight - CardWidth - 8;
 
         double left = Math.Clamp(anchorDipX - (CardWidth / 2.0), minLeft, maxLeft);
-        double top = Math.Max(wa.Top + 8, wa.Bottom - SpacingAboveTaskbar - cardHeight);
+        double top = Math.Max(waTop + 8, waBottom - SpacingAboveTaskbar - cardHeight);
 
         // 任务栏的 "^" 隐藏图标浮出面板展开时，鼠标停在面板里的图标上，按鼠标位置
         // 算出的卡片会正好压住整个面板。把卡片整体抬到面板上方，面板保持完整可见。
@@ -200,7 +227,7 @@ public sealed class MouseBatteryDetailsWindow : Window
                 left = Math.Clamp(
                     panelLeft + (((panelRight - panelLeft) - CardWidth) / 2.0),
                     minLeft, maxLeft);
-                top = Math.Max(wa.Top + 8, panelTop - Gap - cardHeight);
+                top = Math.Max(waTop + 8, panelTop - Gap - cardHeight);
             }
         }
 
@@ -818,7 +845,7 @@ public sealed class MouseBatteryDetailsWindow : Window
             Measure(new Size(CardWidth, double.PositiveInfinity));
             double realHeight = DesiredSize.Height > 0 ? DesiredSize.Height : 160;
 
-            ApplyPlacement(screenX, realHeight);
+            ApplyPlacement(screenX, screenY, realHeight);
             Show();
             Activate();
             _wasPrimaryButtonDown = (UnmanagedMethods.GetAsyncKeyState(UnmanagedMethods.VK_LBUTTON) & 0x8000) != 0;

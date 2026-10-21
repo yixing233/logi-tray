@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using MouseBatteryTray;
@@ -92,7 +93,7 @@ internal static class Program
         ThemeService.SetAcrylicEnabled(settings.AcrylicEnabled);
 
         var readings = DeviceReader.ReadAll(settings);
-        var win = new DeviceCardWindow(readings, settings, () => { });
+        var win = new DeviceCardWindow(readings, settings, () => { }, null);
         win.Closed += (_, _) => app.Shutdown();
         app.Startup += (_, _) =>
         {
@@ -274,8 +275,19 @@ internal sealed class TrayContext : IDisposable
     private DeviceCardWindow? _card;
     private MultiSettingsWindow? _settingsWindow;
 
-    /// <summary>各设备上次已通知的电量，用于避免同一电量反复提醒。</summary>
-    private readonly Dictionary<string, int> _lastNotified = new();
+    /// <summary>
+    /// 各设备已经提醒到哪一档（0 = 无，1 = 低电量，2 = 严重低电量）。
+    ///
+    /// 早先记的是「上次已通知的电量」并只要求“与上次不同”，于是电量每降 1%
+    /// 就弹一次气泡，低电量期间会连续骚扰十几次。现在只在层级**上升**时提醒，
+    /// 与完整版/轻量版「跨阈值一次」的语义一致。
+    /// </summary>
+    private readonly Dictionary<string, int> _notifiedLevel = new();
+
+    /// <summary>后台刷新的重入闸：1 = 已有一次读取在跑。</summary>
+    private int _refreshing;
+
+    private bool _disposed;
 
     /// <summary>
     /// 托盘图标被按下那一刻的光标位置（物理像素），作为卡片锚点。
@@ -307,6 +319,20 @@ internal sealed class TrayContext : IDisposable
             Interval = TimeSpan.FromSeconds(Math.Max(5, _settings.Interval)),
         };
         _timer.Tick += (_, _) => Refresh();
+
+        // 系统切深浅色时重算图标配色。
+        // _dark 不能只靠“关闭设置窗口”那一刻刷新（那意味着用户不打开设置就永远
+        // 用不上新配色）；ThemeService 已统一从界面线程派发，这里直接订阅即可。
+        ThemeService.ThemeChanged += OnSystemThemeChanged;
+    }
+
+    /// <summary>系统主题变了：重算托盘图标的深浅配色并立即重绘。</summary>
+    private void OnSystemThemeChanged()
+    {
+        if (_disposed) return;
+
+        _dark = ResolveDark();
+        UpdateIcon();
     }
 
     /// <summary>记录托盘图标的锚点（此刻菜单尚未弹出，光标就在图标上）。</summary>
@@ -378,21 +404,70 @@ internal sealed class TrayContext : IDisposable
 
     private void Refresh()
     {
-        try
+        // 读取必须离开界面线程。
+        //
+        // ReadAll 里是同步 HID I/O：罗技要起一个 mouse-tray.exe 子进程（700ms 起），
+        // ATK 要发 17 帧前导并逐帧排空读（每轮 ~1.8s），实测一次刷新 2.2 秒；
+        // 设备休眠时还要走满超时。原先 DispatcherTimer 直接调它，等于每 30 秒
+        // 把整个界面（托盘菜单、卡片、设置窗）冻住一两秒。
+        //
+        // 重入闸与完整版一致：已有一次读取在跑就直接放弃，下一次定时刷新会带上新值。
+        if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0)
         {
-            _readings = DeviceReader.ReadAll(_settings);
-            UpdateIcon();
-            UpdateTooltip();
-            CheckNotifications();
-
-            if (_card != null && _card.IsVisible)
-            {
-                _card.UpdateData(_readings);
-            }
+            return;
         }
-        catch
+
+        // 在界面线程上抓一份「启用来源」快照：设置窗口会在界面线程上改这个列表
+        // （Clear/Add），把 _settings 直接丢给后台线程去读就是数据竞争。
+        var enabledSources = _settings.EnabledSources.ToArray();
+
+        Task.Run(() =>
         {
-            // 单次刷新失败不应让托盘消失
+            List<DeviceReading> readings;
+            try
+            {
+                readings = DeviceReader.ReadAll(enabledSources);
+            }
+            catch
+            {
+                readings = new List<DeviceReading>();
+            }
+
+            try
+            {
+                _app.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        ApplyReadings(readings);
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _refreshing, 0);
+                    }
+                }));
+            }
+            catch
+            {
+                // Dispatcher 已关闭（应用正在退出）：直接放闸，不再回投
+                Interlocked.Exchange(ref _refreshing, 0);
+            }
+        });
+    }
+
+    /// <summary>把后台读到的结果应用到界面（在 UI 线程上执行）。</summary>
+    private void ApplyReadings(List<DeviceReading> readings)
+    {
+        if (_disposed) return;
+
+        _readings = readings;
+        UpdateIcon();
+        UpdateTooltip();
+        CheckNotifications();
+
+        if (_card != null && _card.IsVisible)
+        {
+            _card.UpdateData(_readings);
         }
     }
 
@@ -444,8 +519,8 @@ internal sealed class TrayContext : IDisposable
     /// <summary>
     /// 低电量预警。
     ///
-    /// 只在电量与上次已通知的值不同、且未充电时才提醒，
-    /// 避免同一个电量每轮都弹一次（低电量提醒最常见的骚扰来源）。
+    /// 只在**层级上升**时提醒：低电量档一次、严重低电量档一次。电量从 20% 继续
+    /// 掉到 19%、18% 不再重复弹；回到阈值以上则清掉记录，下次掉下来能重新提醒。
     /// </summary>
     private void CheckNotifications()
     {
@@ -455,18 +530,19 @@ internal sealed class TrayContext : IDisposable
         {
             if (!r.IsOnline || r.Percent < 0 || r.IsCharging) continue;
 
-            int threshold = r.Percent <= _settings.CriticalThreshold
-                ? _settings.CriticalThreshold
-                : r.Percent <= _settings.LowThreshold
-                    ? _settings.LowThreshold
-                    : -1;
-            if (threshold < 0) continue;
+            int level = Protocols.ThresholdLevel(r.Percent, _settings.LowThreshold,
+                                                 _settings.CriticalThreshold);
 
-            _lastNotified.TryGetValue(r.Key, out int last);
-            if (!Protocols.ShouldNotify(r.Percent, r.IsCharging, threshold, last))
+            if (level <= 0)
+            {
+                _notifiedLevel.Remove(r.Key);   // 回到正常：允许下次重新提醒
                 continue;
+            }
 
-            bool critical = threshold == _settings.CriticalThreshold;
+            _notifiedLevel.TryGetValue(r.Key, out int last);
+            if (level <= last) continue;
+
+            bool critical = level >= 2;
             _tray.BalloonTipTitle = critical ? "电量严重不足" : "电量偏低";
             _tray.BalloonTipText = critical
                 ? $"{r.Name} 仅剩 {r.Percent}%，请尽快充电。"
@@ -476,14 +552,14 @@ internal sealed class TrayContext : IDisposable
                 : System.Windows.Forms.ToolTipIcon.Info;
             _tray.ShowBalloonTip(6000);
 
-            _lastNotified[r.Key] = r.Percent;
+            _notifiedLevel[r.Key] = level;
         }
 
-        // 已离线或已换设备的记录清掉，下次低电量能重新提醒
-        var keys = _readings.Where(x => x.IsOnline).Select(x => x.Key).ToHashSet();
-        foreach (var stale in _lastNotified.Keys.Where(k => !keys.Contains(k)).ToList())
+        // 彻底消失的设备（拔了接收器/换设备）不再记住层级，避免字典无限增长
+        var keys = _readings.Select(x => x.Key).ToHashSet();
+        foreach (var stale in _notifiedLevel.Keys.Where(k => !keys.Contains(k)).ToList())
         {
-            _lastNotified.Remove(stale);
+            _notifiedLevel.Remove(stale);
         }
     }
 
@@ -508,7 +584,9 @@ internal sealed class TrayContext : IDisposable
 
         if (_card == null || !_card.IsLoaded)
         {
-            _card = new DeviceCardWindow(_readings, _settings, ShowSettings);
+            // 卡片上的「立即刷新」走托盘的后台刷新，而不是自己同步读一遍 ——
+            // 否则点一下按钮界面就冻住两秒（详见 Refresh 的注释）
+            _card = new DeviceCardWindow(_readings, _settings, ShowSettings, Refresh);
             _card.Closed += (_, _) => _card = null;
         }
 
@@ -554,6 +632,8 @@ internal sealed class TrayContext : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        ThemeService.ThemeChanged -= OnSystemThemeChanged;
         _timer.Stop();
         _tray.Dispose();
         _currentIcon?.Dispose();

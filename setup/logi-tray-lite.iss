@@ -18,7 +18,7 @@
 #define AppReadme    RepoRoot + "\setup\readme\logi-tray-lite.txt"
 
 #ifndef AppVersion
-  #define AppVersion "1.2.2"
+  #define AppVersion "1.2.3"
 #endif
 
 #include "app-common.iss"

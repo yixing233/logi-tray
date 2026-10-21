@@ -72,6 +72,44 @@ public class BatterySnapshot
         BatteryStatusText.DeviceLine(DeviceName, Percent, Percent >= 0,
                                      chargeStateKnown: true, IsCharging, StatusText);
 
+    /// <summary>
+    /// 托盘悬停提示的**完整**内容：设备行 + 可选的「（上次 77%，2 小时前）」。
+    ///
+    /// 为什么不能像早先那样由调用方自己拼后缀再硬截：Windows 的托盘提示有
+    /// <see cref="TooltipLimit"/> 个字符的硬上限，而两个版本截的都是已经拼好的
+    /// 整行 —— `tooltip[..63]` 会把电量或状态词从中间切掉（形如
+    /// 「PRO X Wireless  67%  放」）。这里改成有预算意识的裁剪：先试图带上小字，
+    /// 放不下就丢掉小字，再不行就缩设备名，电量和状态永远完整。
+    /// </summary>
+    public string TooltipText
+    {
+        get
+        {
+            string line = TooltipLine;
+
+            if (!HasLastKnown)
+            {
+                return BatteryStatusText.DeviceLine(DeviceName, Percent, Percent >= 0,
+                    chargeStateKnown: true, IsCharging, StatusText, TooltipLimit);
+            }
+
+            string suffix = $"（上次 {LastKnownPercent}%，" +
+                $"{BatteryHistoryText.FormatAge(LastKnownAt!.Value, DateTime.Now)}）";
+
+            if (line.Length + suffix.Length <= TooltipLimit)
+            {
+                return line + suffix;
+            }
+
+            // 小字放不下：牺牲它，而不是牺牲读数
+            return BatteryStatusText.DeviceLine(DeviceName, Percent, Percent >= 0,
+                chargeStateKnown: true, IsCharging, StatusText, TooltipLimit);
+        }
+    }
+
+    /// <summary>Windows 托盘提示的字符上限（.NET 的 NotifyIcon.Text 超出会抛异常）。</summary>
+    public const int TooltipLimit = 63;
+
     public static BatterySnapshot Offline(string deviceName = "罗技设备") => new()
     {
         DeviceName = deviceName,
@@ -150,11 +188,12 @@ public class SettingsConfig
     {
         try
         {
+            // 原子写：写到一半崩溃不会留下半截 JSON（否则 Load 静默回落成出厂设置，
+            // 用户的开机自启、阈值、图标样式会莫名其妙全部丢失）
             string path = ConfigPath;
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var opt = new JsonSerializerOptions { WriteIndented = true };
             string json = JsonSerializer.Serialize(this, opt);
-            File.WriteAllText(path, json);
+            AtomicFile.WriteAllText(path, json);
         }
         catch { }
     }

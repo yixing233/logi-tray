@@ -91,10 +91,31 @@ public static class BatteryStatusText
     /// </summary>
     public static string DeviceLine(string name, int percent, bool online,
                                     bool chargeStateKnown, bool charging,
-                                    string? detail = null)
+                                    string? detail = null, int maxLength = 0)
     {
         string pct = percent >= 0 ? $"{percent}%" : "--%";
-        return $"{name}  {pct}  {For(online, chargeStateKnown, charging, detail)}";
+        string state = For(online, chargeStateKnown, charging, detail);
+        string line = $"{name}  {pct}  {state}";
+
+        if (maxLength <= 0 || line.Length <= maxLength)
+        {
+            return line;
+        }
+
+        // 超出预算时**只缩设备名**：电量与状态是这一行真正要传达的东西，
+        // 把它们从中间截掉（形如「PRO X Wireless  6」「… 放电」）比少显示几个
+        // 设备名字符糟糕得多。窗口的 63 字符硬限制是 Windows 托盘提示本身定的，
+        // 超了 NotifyIcon.Text 会直接抛异常，所以必须裁，只是得裁对地方。
+        int room = maxLength - (pct.Length + state.Length + 4);   // 4 = 两个双空格
+        if (room <= 0)
+        {
+            return line.Length > maxLength ? line[..maxLength] : line;
+        }
+
+        string shortName = name.Length <= room
+            ? name
+            : (room <= 1 ? "…" : name[..(room - 1)] + "…");
+        return $"{shortName}  {pct}  {state}";
     }
 
     /// <summary>

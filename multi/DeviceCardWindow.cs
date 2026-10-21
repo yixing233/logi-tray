@@ -37,6 +37,13 @@ public sealed class DeviceCardWindow : Window
     private readonly MultiSettings _settings;
     private readonly Action _onOpenSettings;
 
+    /// <summary>
+    /// 卡片上「立即刷新」按钮的动作。托盘宿主把它接到**后台**刷新上，
+    /// 避免在 UI 线程同步跑一次 2 秒的 HID 读取（详见 TrayContext.Refresh）。
+    /// 为空时（命令行 --show-details 自检）退回同步读，那里没有托盘可依赖。
+    /// </summary>
+    private readonly Action? _onRequestRefresh;
+
     /// <summary>点击卡片外部收起的轮询定时器（与完整版一致的做法）。</summary>
     private readonly DispatcherTimer _outsideClickTimer;
 
@@ -51,15 +58,22 @@ public sealed class DeviceCardWindow : Window
     /// </summary>
     private double _anchorX = double.NaN;
 
+    /// <summary>
+    /// 锚点的 Y（物理像素）。判断“锚点在哪块显示器上”必须用 Y：
+    /// 多屏上下排布时，仅凭 X 无法区分两块屏。
+    /// </summary>
+    private double _anchorY = double.NaN;
+
     /// <summary>是否已有有效锚点。</summary>
     private bool HasAnchor => !double.IsNaN(_anchorX);
 
     public DeviceCardWindow(List<DeviceReading> readings, MultiSettings settings,
-                            Action onOpenSettings)
+                            Action onOpenSettings, Action? onRequestRefresh = null)
     {
         _readings = readings;
         _settings = settings;
         _onOpenSettings = onOpenSettings;
+        _onRequestRefresh = onRequestRefresh;
 
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -214,7 +228,17 @@ public sealed class DeviceCardWindow : Window
         bar.Children.Add(title);
 
         var refresh = CreateIconButton(RefreshGlyph, "立即刷新");
-        refresh.Click += (_, _) => UpdateData(DeviceReader.ReadAll(_settings));
+        refresh.Click += (_, _) =>
+        {
+            if (_onRequestRefresh != null)
+            {
+                // 交给托盘后台读；结果会通过 UpdateData 回到本卡片
+                _onRequestRefresh();
+                return;
+            }
+
+            UpdateData(DeviceReader.ReadAll(_settings));
+        };
         Grid.SetColumn(refresh, 1);
         bar.Children.Add(refresh);
 
@@ -411,6 +435,7 @@ public sealed class DeviceCardWindow : Window
     public void ToggleNear(double screenX, double screenY)
     {
         _anchorX = screenX;
+        _anchorY = screenY;
 
         if (IsVisible)
         {
@@ -460,15 +485,33 @@ public sealed class DeviceCardWindow : Window
             double scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
             double scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
 
-            var wa = SystemParameters.WorkArea;
-            double minLeft = wa.Left + 8;
-            double maxLeft = wa.Right - CardWidth - 8;
+            // 用锚点所在**那一块**显示器的工作区，而不是主屏的：
+            // SystemParameters.WorkArea 永远返回主屏，用户把任务栏放在副屏时，
+            // 卡片会被画到另一块屏幕的任务栏上方。Win32 给的是物理像素，
+            // 除以与锚点相同的 scale 换成 DIP，两者始终同一坐标系。
+            var primary = SystemParameters.WorkArea;
+            double waLeft = primary.Left;
+            double waTop = primary.Top;
+            double waRight = primary.Right;
+            double waBottom = primary.Bottom;
+
+            if (HasAnchor &&
+                UnmanagedMethods.TryGetMonitorWorkArea((int)_anchorX, (int)_anchorY, out var monitor))
+            {
+                waLeft = monitor.Left / scaleX;
+                waTop = monitor.Top / scaleY;
+                waRight = monitor.Right / scaleX;
+                waBottom = monitor.Bottom / scaleY;
+            }
+
+            double minLeft = waLeft + 8;
+            double maxLeft = waRight - CardWidth - 8;
 
             // 有锚点就居中到图标，否则退回右下角（例如非托盘入口打开）
-            double anchorDipX = HasAnchor ? _anchorX / scaleX : (wa.Right - 40);
+            double anchorDipX = HasAnchor ? _anchorX / scaleX : (waRight - 40);
             double left = Math.Clamp(anchorDipX - CardWidth / 2.0, minLeft, maxLeft);
-            double top = Math.Max(wa.Top + 8,
-                wa.Bottom - SpacingAboveTaskbar - height);
+            double top = Math.Max(waTop + 8,
+                waBottom - SpacingAboveTaskbar - height);
 
             // 隐藏图标浮出面板展开时把卡片抬到面板之上，
             // 否则会正好压住整个面板（与完整版同一处理）
@@ -482,7 +525,7 @@ public sealed class DeviceCardWindow : Window
                 if (vOverlap && hOverlap)
                 {
                     left = Math.Clamp((pl + pr) / 2 - CardWidth / 2, minLeft, maxLeft);
-                    top = Math.Max(wa.Top + 8,
+                    top = Math.Max(waTop + 8,
                         pt - SpacingAboveTaskbar - height);
                 }
             }

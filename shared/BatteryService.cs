@@ -57,12 +57,20 @@ public sealed class BatteryService : IDisposable
 
         _nativeExePath = File.Exists(p1) ? p1 : (File.Exists(p3) ? p3 : "mouse-tray.exe");
 
+        // 刷新间隔下限夹紧：配置来自可手改的 settings.json，
+        // 写 0 会让定时器不再重复触发（永远只有首轮读数），
+        // 写负数则在 Timer.Change 里直接抛异常。
+        int interval = ClampInterval(_config.Interval);
+
         // Program 在注册事件后会主动 RefreshNow；延迟定时器首轮，避免启动时并发访问 HID++ 接收器。
         _timer = new System.Threading.Timer(
             OnTimerTick, null,
-            TimeSpan.FromSeconds(_config.Interval),
-            TimeSpan.FromSeconds(_config.Interval));
+            TimeSpan.FromSeconds(interval),
+            TimeSpan.FromSeconds(interval));
     }
+
+    /// <summary>轮询间隔的合法区间（秒）。与设置界面允许的范围保持一致。</summary>
+    private static int ClampInterval(int seconds) => Math.Clamp(seconds, 5, 3600);
 
     public void RefreshNow()
     {
@@ -238,18 +246,24 @@ public sealed class BatteryService : IDisposable
             // 因此这里也要走一次裁剪与落盘，否则文件永远不会被压缩。
             double nowUtcEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-            if (_samples.Count == 0)
-            {
-                // 没有任何历史样本：直接返回，下面的兜底文案稍后统一处理
-            }
-            else
+            // 进入本段的条件是「本轮读到了电量」或「已有历史可回填」。
+            //
+            // 旧实现在这里写的是 `if (_samples.Count == 0) { /* 直接返回 */ } else { … }`，
+            // 而 20 秒门槛那层又直接取 `_samples[^1]` —— 于是列表为空时既进不了追加
+            // 分支，也没法凭空产生第一条样本：空 → 不追加 → 仍空，自举死锁。
+            // 更糟的是 history.json 只由 MaybePersist（同一分支内）写出，所以文件
+            // 永远不会被创建，缺陷无法自愈。升级上来的机器因为文件早已存在而绕过了
+            // 它，只有全新安装 / 删过数据目录的机器会一直停在「放电数据积累中」
+            // （实测：读到 67% 的机器跑了几十轮，`_samples` 仍是 0 条）。
+            if (percent > 0 || _samples.Count > 0)
             {
                 double nowEpoch = nowUtcEpoch;
 
                 if (percent > 0)
                 {
-                    // 距离上个样本超过 20 秒才记录，避免密集轮询把文件撑大
-                    if (nowEpoch - _samples[^1].T >= 20)
+                    // 距离上个样本超过 20 秒才记录，避免密集轮询把文件撑大。
+                    // 列表为空时必须无条件收下第一条，否则见上面那段自举死锁。
+                    if (_samples.Count == 0 || nowEpoch - _samples[^1].T >= 20)
                     {
                         _samples.Add((nowEpoch, percent, isCharging));
                     }
@@ -481,7 +495,9 @@ public sealed class BatteryService : IDisposable
 
             // 必须显式用「无 BOM」的 UTF8：Encoding.UTF8 会写入 BOM，
             // 使文件不再是标准 JSON（Python 等解析器会直接报错）。
-            File.WriteAllText(_historyPath, sb.ToString(), new UTF8Encoding(false));
+            // 原子写：写到一半被强杀不会留下半截 JSON，否则下次启动解析失败，
+            // 48 小时历史以及「睡前电量」全部静默丢失。
+            AtomicFile.WriteAllText(_historyPath, sb.ToString(), new UTF8Encoding(false));
         }
         catch { }
     }
@@ -492,34 +508,57 @@ public sealed class BatteryService : IDisposable
     /// </summary>
     private void BuildHistoryAnalysis(BatterySnapshot snapshot, double nowEpoch)
     {
-        double dayAgo = nowEpoch - 24 * 3600;
+        // 统计窗口与直方图桶用**同一个**起点：24 个整点桶的最后一个是“本小时”，
+        // 所以最早一个桶从 23 小时前开始。早先统计用 `now - 24h`、桶用 `-23h`，
+        // 两个窗口错着一小时：落在中间那段的样本会计入卡片上的「记录电量区间」，
+        // 却不在任何一根柱子里 —— 区间上下界因此可能比图上看到的更宽。
+        DateTime nowLocal = DateTime.Now;
+        DateTime thisHour = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, nowLocal.Hour, 0, 0);
+        double windowStart = new DateTimeOffset(thisHour.AddHours(-23)).ToUnixTimeSeconds();
 
-        // 单遍扫描：同时求出 24h 区间的最值、放电段起止
+        // 单遍扫描：同时求出窗口内的最值、**当前这一段**连续放电的起止
         int minP = int.MaxValue;
         int maxP = int.MinValue;
-        double firstDischargeT = 0, lastDischargeT = 0;
-        int firstDischargeP = 0, lastDischargeP = 0;
+
+        // 放电段：只认同「最后一次充电之后」那一段。
+        //
+        // 早先取的是窗口内首尾两个非充电样本，于是：
+        //   * 中间充电的那段时间被算进 dtHours，速率被系统性低估；
+        //   * dp = 首 - 尾 还可能变成负数（30% 充满到 95% 再放到 90% → dp < 0），
+        //     预测因此永久停在「放电数据积累中」，直到那个低电量的首样本
+        //     滚出 24 小时窗口。
+        // 现在遇到充电样本就把放电段的起点重置，得到的是真正正在发生的这一段。
+        double runStartT = 0, runEndT = 0;
+        int runStartP = 0, runEndP = 0;
+        bool inRun = false;
         bool hasDischarge = false;
 
         foreach (var s in _samples)
         {
-            if (s.T >= dayAgo)
+            if (s.T < windowStart)
             {
-                if (s.P < minP) minP = s.P;
-                if (s.P > maxP) maxP = s.P;
-
-                if (!s.C)
-                {
-                    if (!hasDischarge)
-                    {
-                        firstDischargeT = s.T;
-                        firstDischargeP = s.P;
-                        hasDischarge = true;
-                    }
-                    lastDischargeT = s.T;
-                    lastDischargeP = s.P;
-                }
+                continue;
             }
+
+            if (s.P < minP) minP = s.P;
+            if (s.P > maxP) maxP = s.P;
+
+            if (s.C)
+            {
+                inRun = false;   // 充电：之前的放电段作废
+                continue;
+            }
+
+            hasDischarge = true;
+            if (!inRun)
+            {
+                runStartT = s.T;
+                runStartP = s.P;
+                inRun = true;
+            }
+
+            runEndT = s.T;
+            runEndP = s.P;
         }
 
         if (maxP >= minP)
@@ -530,11 +569,8 @@ public sealed class BatteryService : IDisposable
 
         // 按小时分桶 (24 桶)，休眠时段沿用上一个已知电量 (Forward Fill)
         var buckets = new List<HourlyBucket>(24);
-        DateTime nowLocal = DateTime.Now;
-        DateTime thisHour = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day, nowLocal.Hour, 0, 0);
 
-        // 24 小时窗口起点之前的最后一个样本，作为首个桶的延续基线
-        double windowStart = new DateTimeOffset(thisHour.AddHours(-23)).ToUnixTimeSeconds();
+        // 窗口起点之前的最后一个样本，作为首个桶的延续基线
         int lastKnownPct = -1;
         foreach (var s in _samples)
         {
@@ -594,8 +630,8 @@ public sealed class BatteryService : IDisposable
         // 续航预测（仅放电段且数据充足时）
         if (snapshot.Percent > 0 && hasDischarge && !snapshot.IsCharging)
         {
-            double dtHours = (lastDischargeT - firstDischargeT) / 3600.0;
-            int dp = firstDischargeP - lastDischargeP;
+            double dtHours = (runEndT - runStartT) / 3600.0;
+            int dp = runStartP - runEndP;
             if (dtHours >= 0.5 && dp > 0)
             {
                 double rate = dp / dtHours;
@@ -647,7 +683,8 @@ public sealed class BatteryService : IDisposable
 
     public void UpdateInterval(int seconds)
     {
-        _timer.Change(TimeSpan.FromSeconds(seconds), TimeSpan.FromSeconds(seconds));
+        int interval = ClampInterval(seconds);
+        _timer.Change(TimeSpan.FromSeconds(interval), TimeSpan.FromSeconds(interval));
     }
 
     public void Dispose()

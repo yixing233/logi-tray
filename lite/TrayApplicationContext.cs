@@ -198,25 +198,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         // 第三段统一成「在充电还是在放电」，与完整版、多品牌版逐字一致。
         // 这里原先是 RemainingTimeText（续航预测），与多品牌版的「放电中」
-        // 量纲不同，三个版本的提示没法横向看。整行由
-        // BatterySnapshot.TooltipLine 给出，不在这一层拼字符串。
-        string tooltip = snapshot.TooltipLine;
-
-        // 悬停提示也补上「睡前还剩多少」：卡片要打开才看得到，
-        // 而这里一眼就能看到。措辞与多品牌版一致。
-        if (snapshot.HasLastKnown)
-        {
-            tooltip += $"（上次 {snapshot.LastKnownPercent}%，" +
-                $"{BatteryHistoryText.FormatAge(snapshot.LastKnownAt!.Value, DateTime.Now)}）";
-        }
-
-        // NotifyIcon.Text 上限 63 字符，超出会抛异常
-        if (tooltip.Length > 63)
-        {
-            tooltip = tooltip[..63];
-        }
-
-        _notifyIcon.Text = tooltip;
+        // 量纲不同，三个版本的提示没法横向看。
+        //
+        // 整行（含「上次 77%，2 小时前」小字）由 BatterySnapshot.TooltipText
+        // 统一拼装并做预算感知的裁剪：早先在这里先拼后 slice（tooltip[..63]），
+        // 设备名一长就会把电量或状态词从中间切掉。
+        _notifyIcon.Text = snapshot.TooltipText;
     }
 
     private void UpdateIcon(int percent, bool charging)
