@@ -47,6 +47,7 @@ public static class ProtocolTests
         TestNotifyDedup();
         TestBatteryHistory();
         TestUpdateChecker();
+        TestReaderOutputDetection();
 
         Console.WriteLine(new string('=', 66));
         Console.WriteLine($"通过 {_passed} 项，失败 {_failed} 项");
@@ -60,6 +61,48 @@ public static class ProtocolTests
         }
         Console.WriteLine("协议解析层自检未通过（FAIL）");
         return 1;
+    }
+
+    // ───────────── 读取器输出判定（决定要不要重试）─────────────
+
+    /// <summary>
+    /// 「这次读取到底有没有读到东西」的判定自检。
+    ///
+    /// 存在理由：这是「鼠标在用却显示离线」那次修复的核心判定。
+    /// 罗技读取路径原先单次失败就直接标离线，实测间隔 2 秒连跑 30 次有 7 次
+    /// 整轮无应答（约 23%），而紧接着重试几乎必定成功。是否重试全靠这个函数
+    /// 判断，它判错了修复就等于没做 —— 而且不会报错，只会安静地继续误报离线。
+    /// </summary>
+    private static void TestReaderOutputDetection()
+    {
+        Console.WriteLine();
+        Console.WriteLine("[读取器输出判定]");
+
+        // 正常读数
+        Check("读到电量算有效",
+                LogitechProvider.ContainsReading("PRO X Wireless: 76% · 放电中 · 满"));
+        Check("充电中也算有效",
+                LogitechProvider.ContainsReading("PRO X Wireless: 55% · 充电中（慢充）"));
+
+        // 读取器读不到时打印的提示语 —— 这是最容易误判成「有内容」的一种
+        Check("提示语不算有效读数",
+                !LogitechProvider.ContainsReading("未读到电量（鼠标可能正在休眠，动一下再试）"));
+        Check("空输出不算有效读数",
+                !LogitechProvider.ContainsReading(""));
+        Check("纯空白不算有效读数",
+                !LogitechProvider.ContainsReading("   \n  \n"));
+
+        // 越界百分比不应被当成有效读数（否则会重试无意义，还会显示错值）
+        Check("超过100不算有效读数",
+                !LogitechProvider.ContainsReading("PRO X Wireless: 150% · 放电中"));
+
+        // 设备名含数字与百分号的坑：电量只在冒号之后找
+        Check("设备名含百分号仍能识别",
+                LogitechProvider.ContainsReading("G502 100% Edition: 76% · 放电中"));
+
+        // 多行输出里只要有一行可解析就算读到
+        Check("多行中有一行有效即可",
+                LogitechProvider.ContainsReading("未读到电量\nPRO X Wireless: 76% · 放电中"));
     }
 
     // ───────────── 断言辅助 ─────────────

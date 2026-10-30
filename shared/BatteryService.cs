@@ -126,19 +126,40 @@ public sealed class BatteryService : IDisposable
         {
             if (File.Exists(_nativeExePath))
             {
-                var psi = new ProcessStartInfo
+                // ---- 带重试的读取 ----
+                //
+                // 为什么要重试：原生读取器每轮都重新打开接收器句柄，设备在两次
+                // 轮询之间会掉进浅休眠，唤醒它的第一帧请求有时间窗（native 侧实测
+                // 650~850ms）。落在窗口之外就整轮无应答 —— 实测间隔 2 秒连跑 30 次
+                // 有 7 次读不到（约 23%），而紧接着重试一次几乎必定成功。
+                //
+                // 不重试的后果不是「偶尔少一个数」：多品牌版没有 StaleGrace 窗口，
+                // 一次失败就直接把设备标成「已休眠」，用户看到的就是
+                // 「鼠标明明在用却显示离线」。完整版/轻量版靠 StaleGrace 掩盖了
+                // 这个抖动，但那是 5 分钟的模糊态，不如从源头少失败几次。
+                const int attempts = 2;
+                string output = string.Empty;
+                for (int attempt = 0; attempt < attempts; attempt++)
                 {
-                    FileName = _nativeExePath,
-                    Arguments = "--once",
-                    RedirectStandardOutput = true,
-                    StandardOutputEncoding = Encoding.UTF8,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var p = Process.Start(psi);
-                if (p != null)
-                {
-                    string output = p.StandardOutput.ReadToEnd();
+                    if (attempt > 0)
+                    {
+                        // 让设备的唤醒窗口重新打开一点，再试一次
+                        Thread.Sleep(150);
+                    }
+
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = _nativeExePath,
+                        Arguments = "--once",
+                        RedirectStandardOutput = true,
+                        StandardOutputEncoding = Encoding.UTF8,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    using var p = Process.Start(psi);
+                    if (p == null) continue;
+
+                    output = p.StandardOutput.ReadToEnd();
 
                     // 原生读取器的预算已从 1.5s 抬到 3s（要给唤醒中的设备留出
                     // 首帧 650~850ms + 若干次往返的时间），因此这里的兜底等待
@@ -197,6 +218,9 @@ public sealed class BatteryService : IDisposable
                         levelText = parsed.LevelText;
                         break;
                     }
+
+                    // 这一轮确实读到了电量就不再重试 —— 重试只服务于「整轮无应答」
+                    if (percent > 0) break;
                 }
             }
         }

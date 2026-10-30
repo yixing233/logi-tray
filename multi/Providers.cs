@@ -283,8 +283,14 @@ public sealed class LogitechProvider : IBatteryProvider
         return last;
     }
 
-    /// <summary>输出里是否至少有一行能被解析成有效读数。</summary>
-    private static bool ContainsReading(string output)
+    /// <summary>
+    /// 输出里是否至少有一行能被解析成有效读数。
+    ///
+    /// 这是「要不要重试」的判定依据，因此必须是 internal 且有单测：
+    /// 判得太宽（例如把「未读到电量」那句提示也算成读数）会让重试永远不触发，
+    /// 等于没修；判得太严（漏掉合法格式）会让本来就好的读取白跑一遍。
+    /// </summary>
+    internal static bool ContainsReading(string output)
     {
         foreach (string raw in output.Split('\n'))
         {
