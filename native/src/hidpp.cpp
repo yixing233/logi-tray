@@ -1012,8 +1012,21 @@ std::vector<Reading> ReadAll(double budgetSec, bool scanAllDevices) {
                 auto it = g_nameCache.find(nameKey);
                 if (it != g_nameCache.end()) r.name = it->second;
             }
-            if (r.name.empty()) {
-                r.name = rx.DeviceName(deviceIndex, left);
+            // 查不到名字时**重试**，而不是立刻退回「设备 #N」。
+            //
+            // 为什么必须重试：真机实测（间隔 2 秒连续跑 50 次）约有 12% 的轮次
+            // 拿不到名字 —— 电量明明读到了，名字那次往返却超时。这有两个后果：
+            //   1. 界面显示「设备 #1」，用户认不出是哪只鼠标；
+            //   2. 应用按 `logitech:<设备名>` 记忆「上次电量」，名字一变，
+            //      这条历史就对不上了（见 BatteryHistory 的退化回退逻辑）。
+            // 名字查询是 1~3 次往返，紧接在电量读完之后，设备通常已经醒透，
+            // 重试一次几乎必定成功。
+            for (int nameAttempt = 0; nameAttempt < 2 && r.name.empty();
+                 ++nameAttempt) {
+                const double nameLeft = deadline - NowSec();
+                if (nameLeft <= 0.02) break;
+                r.name = rx.DeviceName(
+                    deviceIndex, std::min(nameLeft, nameAttempt == 0 ? 0.6 : 0.9));
                 if (!r.name.empty()) {
                     std::lock_guard<std::mutex> lock(g_cacheMutex);
                     g_nameCache[nameKey] = r.name;
